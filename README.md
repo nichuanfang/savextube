@@ -47,7 +47,7 @@ SaveXTube 是一个基于 Telegram 的智能视频下载工具，支持 YouTube�
 ### 步骤 3：配置 Cookies 路径
 将 cookies 文件保存到指定路径：
 ```
-/volume1/docker/telegram-video-bot/cookies/x_cookies.txt
+/vol1/1000/docker/SaveXTube/x_cookies.txt
 ```
 
 ### 步骤 4：重启服务
