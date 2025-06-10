@@ -43,16 +43,17 @@ SaveXTube 是一个基于 Telegram 的智能视频下载工具，支持 YouTube�
 1. 安装浏览器扩展 **Get cookies.txt LOCALLY**
 2. 访问 X 平台并使用扩展导出 cookies
 3. 将导出的 cookies 保存为 `x_cookies.txt`
-   
 4.导出后的内容如下：
+<pre lang="markdown">
+```txt
+# Netscape HTTP Cookie File
+# http://curl.haxx.se/rfc/cookie_spec.html
+# This is a generated file! Do not edit.
 
-#Netscape HTTP Cookie File
+.x.com     TRUE     /     TRUE     11111111111     XXX     XXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+```
+</pre>
 
-#http://curl.haxx.se/rfc/cookie_spec.html
-
-#This is a generated file!  Do not edit.
-
-.x.com	TRUE	/	TRUE	11111111111	XXX	XXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 ### 步骤 3：配置 Cookies 路径
 将 cookies 文件保存到指定路径：
 ```
