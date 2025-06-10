@@ -52,7 +52,7 @@ SaveXTube 是一个基于 Telegram 的智能视频下载工具，支持 YouTube�
 
 #This is a generated file!  Do not edit.
 
-.x.com	TRUE	/	TRUE	1780546503	XXX	XXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+.x.com	TRUE	/	TRUE	11111111111	XXX	XXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 ### 步骤 3：配置 Cookies 路径
 将 cookies 文件保存到指定路径：
 ```
