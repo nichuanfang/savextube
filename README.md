@@ -7,7 +7,9 @@ SaveXTube 是一个基于 Telegram 的智能视频下载工具，支持 YouTube�
 ### 📱 Telegram 机器人集成
 - 简单易用：用户只需发送视频链接即可开始下载
 - 支持多平台：YouTube、X(Twitter) 等主流视频平台
+- YouTbue自动选择最佳视频质量下载
 - 即时响应：机器人实时处理下载请求
+- 详细的下载信息展示
 
 ### 📊 实时进度显示
 - **文件信息**：显示视频标题、文件大小
@@ -82,20 +84,17 @@ services:
     environment:
       # Telegram 机器人 Token（必填）
       TELEGRAM_BOT_TOKEN: "your_bot_token_here"
-      
       # 自动转换设置（可选，默认开启）
       CONVERT_TO_MP4: true
-      
       # X 平台 Cookies 路径（可选，仅下载 NSFW 内容时需要）
       X_COOKIES: /app/x/x_cookies.txt
-      
       # 容器内下载路径（默认 /downloads）
       DOWNLOAD_PATH: /downloads
-      
+      # 启用代理（支持 HTTP/HTTPS 代理，格式为http://host:port）
+      PROXY_HOST: http://192.168.2.1:7890
     volumes:
       # 下载文件存储路径映射
       - /vol1/1000/media/downloads/SaveXTube:/downloads
-      
       # X 平台 Cookies 文件映射（可选）
       - /vol1/1000/docker/SaveXTube/x_cookies.txt:/app/x/x_cookies.txt
 ```
@@ -108,6 +107,8 @@ services:
 | `CONVERT_TO_MP4` | 是否自动转换 webm 为 mp4 | ❌ 可选 | `true` |
 | `X_COOKIES` | X 平台 cookies 文件路径 | ❌ 可选 | - |
 | `DOWNLOAD_PATH` | 容器内下载路径 | ❌ 可选 | `/downloads` |
+| `PROXY_HOST` | 启用代理 | ❌ 可选 | - |
+
 
 ## 📖 使用方法
 
