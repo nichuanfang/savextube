@@ -10,6 +10,11 @@ from urllib.parse import urlparse
 from typing import Optional, Dict, Any
 import time
 import threading
+import requests
+import urllib3
+
+# 禁用 SSL 警告
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 try:
     from telegram import Update
@@ -17,7 +22,7 @@ try:
     import yt_dlp
 except ImportError as e:
     print(f"Error importing required packages: {e}")
-    print("Please install: pip install python-telegram-bot yt-dlp")
+    print("Please install: pip install python-telegram-bot yt-dlp requests")
     sys.exit(1)
 
 # 配置日志
@@ -32,6 +37,37 @@ class VideoDownloader:
         self.base_download_path = Path(base_download_path)
         self.x_cookies_path = x_cookies_path
         
+        # 从环境变量获取代理配置
+        self.proxy_host = os.getenv('PROXY_HOST')
+        if self.proxy_host:
+            # 测试代理连接
+            if self._test_proxy_connection():
+                logger.info(f"代理服务器已配置并连接成功: {self.proxy_host}")
+                logger.info(f"yt-dlp 使用代理: {self.proxy_host}")
+                # 设置系统代理环境变量
+                os.environ['HTTP_PROXY'] = self.proxy_host
+                os.environ['HTTPS_PROXY'] = self.proxy_host
+                os.environ['NO_PROXY'] = 'localhost,127.0.0.1'
+            else:
+                logger.warning(f"代理服务器已配置但连接失败: {self.proxy_host}")
+                logger.info("yt-dlp 直接连接")
+                self.proxy_host = None  # 连接失败时禁用代理
+                # 清除系统代理环境变量
+                os.environ.pop('HTTP_PROXY', None)
+                os.environ.pop('HTTPS_PROXY', None)
+                os.environ.pop('NO_PROXY', None)
+        else:
+            logger.info("代理服务器未配置，将直接连接")
+            logger.info("yt-dlp 直接连接")
+            # 确保系统代理环境变量被清除
+            os.environ.pop('HTTP_PROXY', None)
+            os.environ.pop('HTTPS_PROXY', None)
+            os.environ.pop('NO_PROXY', None)
+        
+        # 从环境变量获取是否转换格式的配置
+        self.convert_to_mp4 = os.getenv('CONVERT_TO_MP4', 'true').lower() == 'true'
+        logger.info(f"视频格式转换: {'开启' if self.convert_to_mp4 else '关闭'}")
+        
         # 创建下载目录
         self.x_download_path = self.base_download_path / "x"
         self.youtube_download_path = self.base_download_path / "youtube"
@@ -42,6 +78,29 @@ class VideoDownloader:
         logger.info(f"X 下载路径: {self.x_download_path}")
         logger.info(f"YouTube 下载路径: {self.youtube_download_path}")
         
+    def _test_proxy_connection(self) -> bool:
+        """测试代理服务器连接"""
+        if not self.proxy_host:
+            return False
+            
+        try:
+            # 解析代理地址
+            proxy_url = urlparse(self.proxy_host)
+            proxies = {
+                'http': self.proxy_host,
+                'https': self.proxy_host
+            }
+            
+            # 设置超时时间为5秒
+            response = requests.get('http://www.google.com', 
+                                 proxies=proxies, 
+                                 timeout=5,
+                                 verify=False)
+            return response.status_code == 200
+        except Exception as e:
+            logger.error(f"代理连接测试失败: {str(e)}")
+            return False
+    
     def is_x_url(self, url: str) -> bool:
         """检查是否为 X (Twitter) URL"""
         parsed = urlparse(url)
@@ -111,6 +170,11 @@ class VideoDownloader:
                     }
                     available_formats.append(format_info)
                 
+                # 检查是否有高分辨率格式
+                has_high_res = any(f.get('height', 0) >= 2160 for f in formats)
+                if has_high_res:
+                    logger.info("检测到4K分辨率可用")
+                
                 return {
                     'success': True,
                     'title': info.get('title', 'Unknown'),
@@ -122,25 +186,6 @@ class VideoDownloader:
             return {'success': False, 'error': str(e)}
     
     def cleanup_duplicates(self):
-        """清理重复文件"""
-        try:
-            cleaned_count = 0
-            for directory in [self.x_download_path, self.youtube_download_path]:
-                if directory.exists():
-                    for file in directory.glob("*"):
-                        if file.is_file() and " #" in file.name:
-                            # 检查是否是视频文件
-                            if any(file.name.endswith(ext) for ext in ['.mp4', '.mkv', '.webm', '.mov', '.avi']):
-                                try:
-                                    file.unlink()
-                                    logger.info(f"删除重复文件: {file.name}")
-                                    cleaned_count += 1
-                                except Exception as e:
-                                    logger.error(f"删除文件失败: {e}")
-            return cleaned_count
-        except Exception as e:
-            logger.error(f"清理重复文件失败: {e}")
-            return 0
         """清理重复文件"""
         try:
             cleaned_count = 0
@@ -190,24 +235,78 @@ class VideoDownloader:
         
         # 设置 yt-dlp 选项 - 根据平台优化格式选择
         if self.is_youtube_url(url):
-            # YouTube 专用配置 - 使用最宽松的格式选择
+            # 首先尝试获取视频信息
+            try:
+                with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    # 获取所有可用的格式
+                    formats = info.get('formats', [])
+                    logger.info("可用的视频格式:")
+                    for f in formats:
+                        if f.get('height'):
+                            logger.info(f"格式: {f.get('format_id')} - {f.get('height')}p - {f.get('ext')}")
+                    
+                    # 选择最佳视频和音频流
+                    video_streams = [f for f in formats if f.get('vcodec') != 'none' and f.get('acodec') == 'none' and f.get('height')]
+                    audio_streams = [f for f in formats if f.get('acodec') != 'none' and f.get('vcodec') == 'none']
+                    
+                    if video_streams and audio_streams:
+                        best_video = max(video_streams, key=lambda f: f.get('height', 0))
+                        best_audio = max(audio_streams, key=lambda f: f.get('abr', 0) if f.get('abr') else 0)
+                        best_format = f"{best_video['format_id']}+{best_audio['format_id']}"
+                        logger.info(f"自动选择最佳格式: {best_format} ({best_video.get('height')}p, {best_video.get('ext')})")
+                    else:
+                        best_format = 'best'
+                        logger.info("使用默认最佳格式")
+            except Exception as e:
+                logger.error(f"获取视频信息失败: {e}")
+                best_format = 'best'
+            
             ydl_opts = {
                 'outtmpl': str(download_path / f'{timestamp}_%(title)s.%(ext)s'),
-                'format': 'best/worst',  # 最宽松的格式选择
+                'format': best_format,
                 'writeinfojson': False,
                 'writedescription': False,
                 'writesubtitles': False,
                 'writeautomaticsub': False,
                 'nooverwrites': True,
                 'restrictfilenames': True,
-                'merge_output_format': 'mp4',  # 强制输出 mp4 格式
-                'postprocessors': [{
-                    'key': 'FFmpegVideoConvertor',
-                    'preferedformat': 'mp4',
-                }],
-                'ignoreerrors': False,
-                'no_warnings': False,  # 显示警告以便调试
+                'socket_timeout': 30,
+                'retries': 10,
+                'fragment_retries': 10,
+                'extractor_retries': 10,
+                'skip_unavailable_fragments': True,
+                'nocheckcertificate': True,
+                'prefer_insecure': True,
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'DNT': '1',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'Sec-Fetch-User': '?1',
+                    'Pragma': 'no-cache',
+                    'Cache-Control': 'no-cache',
+                }
             }
+            
+            # 根据配置决定是否添加转换选项
+            if self.convert_to_mp4:
+                ydl_opts.update({
+                    'merge_output_format': 'mp4',
+                    'postprocessors': [{
+                        'key': 'FFmpegVideoConvertor',
+                        'preferedformat': 'mp4',
+                    }]
+                })
+                logger.info("已启用视频格式转换为 MP4")
+            else:
+                logger.info("保持原始视频格式")
         else:
             # X (Twitter) 和其他平台配置
             ydl_opts = {
@@ -219,7 +318,36 @@ class VideoDownloader:
                 'writeautomaticsub': False,
                 'nooverwrites': True,
                 'restrictfilenames': True,
+                'socket_timeout': 30,
+                'retries': 10,
+                'fragment_retries': 10,
+                'extractor_retries': 10,
+                'skip_unavailable_fragments': True,
+                'nocheckcertificate': True,
+                'prefer_insecure': True,
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'DNT': '1',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'Sec-Fetch-User': '?1',
+                    'Pragma': 'no-cache',
+                    'Cache-Control': 'no-cache',
+                }
             }
+        
+        # 添加代理配置（如果设置了代理）
+        if self.proxy_host:
+            ydl_opts['proxy'] = self.proxy_host
+            logger.info(f"使用代理服务器下载: {self.proxy_host}")
+        else:
+            logger.info("未使用代理服务器，直接连接下载")
         
         # 如果是 X URL 且有 cookies，添加 cookies 配置
         if self.is_x_url(url) and self.x_cookies_path and os.path.exists(self.x_cookies_path):
@@ -289,70 +417,27 @@ class VideoDownloader:
         ydl_opts['progress_hooks'] = [progress_hook]
         
         def run_download():
-            """多级格式尝试下载"""
-            
-            # 定义多个格式尝试方案
-            format_attempts = []
-            
-            if self.is_youtube_url(url):
-                format_attempts = [
-                    'best/worst',  # 最宽松
-                    'best',        # 最佳质量
-                    'worst',       # 最低质量
-                    '',            # 默认（不指定格式）
-                ]
-            else:
-                format_attempts = [
-                    'best',
-                    'worst',
-                    '',
-                ]
-            
-            last_error = None
-            
-            for i, format_selector in enumerate(format_attempts):
-                try:
-                    logger.info(f"尝试格式 {i+1}/{len(format_attempts)}: '{format_selector}'")
-                    
-                    # 复制基础配置
-                    attempt_opts = ydl_opts.copy()
-                    
-                    # 设置格式选择器
-                    if format_selector:
-                        attempt_opts['format'] = format_selector
-                    elif 'format' in attempt_opts:
-                        # 如果是空字符串，移除format选项，让yt-dlp自动选择
-                        del attempt_opts['format']
-                    
-                    # 对于后续尝试，移除一些可能导致问题的选项
-                    if i > 0:
-                        attempt_opts.pop('merge_output_format', None)
-                        if i > 1:
-                            attempt_opts.pop('postprocessors', None)
-                    
-                    with yt_dlp.YoutubeDL(attempt_opts) as ydl:
-                        ydl.download([url])
-                    
-                    logger.info(f"格式 '{format_selector}' 下载成功")
-                    return True
-                    
-                except yt_dlp.utils.DownloadError as e:
-                    error_msg = str(e)
-                    last_error = error_msg
-                    logger.warning(f"格式 '{format_selector}' 失败: {error_msg}")
-                    
-                    # 如果不是格式问题，直接退出
-                    if "Requested format is not available" not in error_msg:
-                        logger.error(f"非格式问题，停止尝试: {error_msg}")
-                        break
+            """下载视频"""
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    try:
+                        # 首先尝试获取视频信息
+                        info = ydl.extract_info(url, download=False)
+                        if not info:
+                            raise Exception("无法获取视频信息")
                         
-                except Exception as e:
-                    last_error = str(e)
-                    logger.warning(f"格式 '{format_selector}' 异常: {str(e)}")
-            
-            # 所有格式都失败了
-            logger.error(f"所有格式尝试都失败了，最后错误: {last_error}")
-            return False
+                        # 如果成功获取信息，开始下载
+                        ydl.download([url])
+                        logger.info("下载成功")
+                        return True
+                        
+                    except Exception as e:
+                        logger.error(f"下载失败: {str(e)}")
+                        return False
+                        
+            except Exception as e:
+                logger.error(f"下载器初始化失败: {str(e)}")
+                return False
         
         try:
             # 运行下载
@@ -393,7 +478,20 @@ class VideoDownloader:
             if downloaded_file and os.path.exists(downloaded_file):
                 file_size_mb = file_size / (1024 * 1024)
                 display_filename = self._generate_display_filename(original_filename, timestamp)
-                
+                # 获取分辨率信息
+                video_width = None
+                video_height = None
+                try:
+                    import ffmpeg
+                    probe = ffmpeg.probe(downloaded_file)
+                    for stream in probe['streams']:
+                        if stream['codec_type'] == 'video':
+                            video_width = stream.get('width')
+                            video_height = stream.get('height')
+                            break
+                except Exception as e:
+                    logger.warning(f"获取分辨率失败: {e}")
+                resolution = f"{video_width}x{video_height}" if video_width and video_height else "未知"
                 return {
                     'success': True,
                     'filename': display_filename,
@@ -401,7 +499,8 @@ class VideoDownloader:
                     'size_mb': round(file_size_mb, 2),
                     'platform': platform,
                     'download_path': str(download_path),
-                    'original_filename': original_filename
+                    'original_filename': original_filename,
+                    'resolution': resolution
                 }
             else:
                 return {'success': False, 'error': '无法找到下载的文件'}
@@ -412,8 +511,14 @@ class VideoDownloader:
 
 class TelegramBot:
     def __init__(self, token: str, downloader: VideoDownloader):
-        self.token = token
         self.downloader = downloader
+        # 配置 Telegram Bot 的代理
+        if self.downloader.proxy_host:
+            logger.info(f"Telegram Bot 使用代理: {self.downloader.proxy_host}")
+            self.application = Application.builder().token(token).proxy(self.downloader.proxy_host).build()
+        else:
+            logger.info("Telegram Bot 直接连接")
+            self.application = Application.builder().token(token).build()
         self.active_downloads = {}
         
     async def version_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -422,33 +527,33 @@ class TelegramBot:
             version_info = self.downloader.check_ytdlp_version()
             
             if version_info['success']:
-                version_text = f"""📊 系统版本信息
+                version_text = f"""系统版本信息
 
-🔧 yt-dlp: {version_info['version']}
-🐍 Python: {sys.version.split()[0]}
-🤖 机器人: v2.0 (YouTube修复版)
+yt-dlp: {version_info['version']}
+Python: {sys.version.split()[0]}
+机器人: v2.0 (YouTube修复版)
 
-🎯 支持的功能:
+支持的功能:
 ✅ 多级格式尝试
 ✅ 自动格式回退
 ✅ 智能错误恢复
 ✅ 详细调试日志
 
-💡 如果下载仍有问题，请使用 /formats 命令检查视频格式"""
+如果下载仍有问题，请使用 /formats 命令检查视频格式"""
                 
                 await update.message.reply_text(version_text)
             else:
-                await update.message.reply_text(f"❌ 无法获取版本信息: {version_info['error']}")
+                await update.message.reply_text(f"无法获取版本信息: {version_info['error']}")
                 
         except Exception as e:
-            await update.message.reply_text(f"❌ 版本检查失败: {str(e)}")
+            await update.message.reply_text(f"版本检查失败: {str(e)}")
     
     async def formats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 /formats 命令 - 检查视频格式"""
         try:
             # 获取用户发送的URL
             if not context.args:
-                await update.message.reply_text("""🔍 格式检查命令
+                await update.message.reply_text("""格式检查命令
 
 使用方法：
 /formats <视频链接>
@@ -463,20 +568,20 @@ class TelegramBot:
             
             # 验证URL
             if not url.startswith(('http://', 'https://')):
-                await update.message.reply_text("❌ 请提供有效的视频链接")
+                await update.message.reply_text("请提供有效的视频链接")
                 return
             
-            check_message = await update.message.reply_text("🔍 正在检查视频格式...")
+            check_message = await update.message.reply_text("正在检查视频格式...")
             
             # 检查格式
             result = self.downloader.check_video_formats(url)
             
             if result['success']:
-                formats_text = f"""📋 视频格式信息
+                formats_text = f"""视频格式信息
 
-🎬 标题：{result['title']}
+标题：{result['title']}
 
-📊 可用格式（前10个）：
+可用格式（前10个）：
 """
                 for i, fmt in enumerate(result['formats'], 1):
                     size_info = ""
@@ -486,22 +591,22 @@ class TelegramBot:
                     
                     formats_text += f"{i}. ID: {fmt['id']} | {fmt['ext']} | {fmt['quality']}{size_info}\n"
                 
-                formats_text += "\n💡 如果下载失败，可以尝试其他视频或报告此信息。"
+                formats_text += "\n如果下载失败，可以尝试其他视频或报告此信息。"
                 
                 await check_message.edit_text(formats_text)
             else:
-                await check_message.edit_text(f"❌ 格式检查失败: {result['error']}")
+                await check_message.edit_text(f"格式检查失败: {result['error']}")
                 
         except Exception as e:
-            await update.message.reply_text(f"❌ 格式检查出错: {str(e)}")
+            await update.message.reply_text(f"格式检查出错: {str(e)}")
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 /start 命令"""
-        welcome_message = """🎬 视频下载机器人已启动！
+        welcome_message = """视频下载机器人已启动！
 
 支持的平台：
-• 🐦 X (Twitter)
-• 📺 YouTube
+• X (Twitter)
+• YouTube
 
 使用方法：
 直接发送视频链接即可开始下载
@@ -520,29 +625,29 @@ class TelegramBot:
 ✅ 支持 NSFW 内容下载
 ✅ 唯一文件名，避免覆盖
 
-🔧 YouTube 下载优化：
-• 自动选择最佳质量 (≤1080p)
+YouTube 下载优化：
+• 自动选择最佳质量
 • 格式不可用时自动使用备用格式
 • 强制转换为 mp4 格式"""
         await update.message.reply_text(welcome_message)
     
     async def cleanup_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 /cleanup 命令"""
-        cleanup_message = await update.message.reply_text("🧹 开始清理重复文件...")
+        cleanup_message = await update.message.reply_text("开始清理重复文件...")
         
         try:
             cleaned_count = self.downloader.cleanup_duplicates()
             
             if cleaned_count > 0:
-                completion_text = f"""✅ 清理完成!
-🗑️ 删除了 {cleaned_count} 个重复文件
-💾 释放了存储空间"""
+                completion_text = f"""清理完成!
+删除了 {cleaned_count} 个重复文件
+释放了存储空间"""
             else:
-                completion_text = "✅ 清理完成! 未发现重复文件"
+                completion_text = "清理完成! 未发现重复文件"
                 
             await cleanup_message.edit_text(completion_text)
         except Exception as e:
-            await cleanup_message.edit_text(f"❌ 清理失败: {str(e)}")
+            await cleanup_message.edit_text(f"清理失败: {str(e)}")
     
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 /status 命令"""
@@ -567,19 +672,19 @@ class TelegramBot:
             
             total_size_mb = total_size / (1024 * 1024)
             
-            status_text = f"""📊 下载统计
+            status_text = f"""下载统计
 
-📁 X 视频: {len(x_files)} 个文件
-📁 YouTube 视频: {len(youtube_files)} 个文件
-📦 总计: {len(x_files) + len(youtube_files)} 个文件
-💾 总大小: {total_size_mb:.2f}MB
+X 视频: {len(x_files)} 个文件
+YouTube 视频: {len(youtube_files)} 个文件
+总计: {len(x_files) + len(youtube_files)} 个文件
+总大小: {total_size_mb:.2f}MB
 
-🤖 机器人状态: 正常运行
-⚡ 活跃下载: {len(self.active_downloads)} 个"""
+机器人状态: 正常运行
+活跃下载: {len(self.active_downloads)} 个"""
 
             await update.message.reply_text(status_text)
         except Exception as e:
-            await update.message.reply_text(f"❌ 获取状态失败: {str(e)}")
+            await update.message.reply_text(f"获取状态失败: {str(e)}")
     
     async def handle_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 URL 消息"""
@@ -587,25 +692,25 @@ class TelegramBot:
         
         # 验证 URL 格式
         if not url.startswith(('http://', 'https://')):
-            await update.message.reply_text("❌ 请发送有效的视频链接")
+            await update.message.reply_text("请发送有效的视频链接")
             return
         
         # 检查是否支持的平台
         if not (self.downloader.is_x_url(url) or self.downloader.is_youtube_url(url)):
-            await update.message.reply_text("❌ 目前只支持 X (Twitter) 和 YouTube 链接")
+            await update.message.reply_text("目前只支持 X (Twitter) 和 YouTube 链接")
             return
         
         chat_id = update.effective_chat.id
         
         # 检查是否有正在进行的下载
         if chat_id in self.active_downloads:
-            await update.message.reply_text("⏳ 有下载任务正在进行中，请等待完成后再试")
+            await update.message.reply_text("有下载任务正在进行中，请等待完成后再试")
             return
         
         platform = "X" if self.downloader.is_x_url(url) else "YouTube"
         
         # 发送开始下载消息
-        progress_message = await update.message.reply_text(f"🚀 开始下载 {platform} 视频...")
+        progress_message = await update.message.reply_text(f"开始下载 {platform} 视频...")
         
         # 获取当前事件循环引用
         current_loop = asyncio.get_running_loop()
@@ -628,10 +733,10 @@ class TelegramBot:
                     progress_bar = self._create_progress_bar(progress)
                     size_mb = total_bytes / (1024 * 1024) if total_bytes > 0 else downloaded_bytes / (1024 * 1024)
                     
-                    progress_text = f"""🗂️ 文件：{display_filename}
-📊 大小：{size_mb:.2f}MB
-⬇️ 速度：完成
-📈 进度：{progress_bar} ({progress:.1f}%)"""
+                    progress_text = f"""📝 文件：{display_filename}
+💾 大小：{size_mb:.2f}MB
+⚡ 速度：完成
+📊 进度：{progress_bar} ({progress:.1f}%)"""
                     
                     # 使用事件循环引用安全更新
                     asyncio.run_coroutine_threadsafe(
@@ -647,10 +752,10 @@ class TelegramBot:
                     size_mb = total_bytes / (1024 * 1024)
                     speed_mb = (speed or 0) / (1024 * 1024)
                     
-                    progress_text = f"""🗂️ 文件：{display_filename}
-📊 大小：{size_mb:.2f}MB
-⬇️ 速度：{speed_mb:.2f}MB/s
-📈 进度：{progress_bar} ({progress:.1f}%)"""
+                    progress_text = f"""📝 文件：{display_filename}
+💾 大小：{size_mb:.2f}MB
+⚡ 速度：{speed_mb:.2f}MB/s
+📊 进度：{progress_bar} ({progress:.1f}%)"""
                     
                     # 使用事件循环引用安全更新
                     asyncio.run_coroutine_threadsafe(
@@ -662,10 +767,10 @@ class TelegramBot:
                     downloaded_mb = downloaded_bytes / (1024 * 1024) if downloaded_bytes > 0 else 0
                     speed_mb = (speed or 0) / (1024 * 1024)
                     
-                    progress_text = f"""🗂️ 文件：{display_filename}
-📊 已下载：{downloaded_mb:.2f}MB
-⬇️ 速度：{speed_mb:.2f}MB/s
-📈 进度：下载中..."""
+                    progress_text = f"""📝 文件：{display_filename}
+💾 大小：{downloaded_mb:.2f}MB
+⚡ 速度：{speed_mb:.2f}MB/s
+📊 进度：下载中..."""
                     
                     asyncio.run_coroutine_threadsafe(
                         progress_message.edit_text(progress_text),
@@ -685,20 +790,21 @@ class TelegramBot:
             if result['success']:
                 # 生成用户友好的文件名显示
                 display_filename = self._clean_filename_for_display(result['filename'])
-                
-                completion_text = f"""✅ 下载完成!
-🗂️ 文件名：{display_filename}
-📁 保存位置：{result['platform']} 文件夹
-📦 文件大小：{result['size_mb']}MB
-📈 进度：████████████████████ (100%)"""
+                resolution = result.get('resolution', '未知')
+                completion_text = f"""下载完成!
+📝 文件名：{display_filename}
+📂 保存位置：{result['platform']} 文件夹
+💾 文件大小：{result['size_mb']}MB
+🎥 分辨率：{resolution}
+✅ 进度：████████████████████ (100%)"""
                 
                 await progress_message.edit_text(completion_text)
             else:
-                await progress_message.edit_text(f"❌ 下载失败：{result['error']}")
+                await progress_message.edit_text(f"下载失败：{result['error']}")
                 
         except Exception as e:
             logger.error(f"下载过程中发生错误: {str(e)}")
-            await progress_message.edit_text(f"❌ 下载失败：{str(e)}")
+            await progress_message.edit_text(f"下载失败：{str(e)}")
         finally:
             # 清除下载标记
             self.active_downloads.pop(chat_id, None)
@@ -730,22 +836,19 @@ class TelegramBot:
     
     def run(self):
         """启动机器人"""
-        logger.info("🤖 Telegram 视频下载机器人启动中...")
-        
-        # 创建应用
-        application = Application.builder().token(self.token).build()
+        logger.info("Telegram 视频下载机器人启动中...")
         
         # 添加处理器
-        application.add_handler(CommandHandler("start", self.start_command))
-        application.add_handler(CommandHandler("status", self.status_command))
-        application.add_handler(CommandHandler("cleanup", self.cleanup_command))
-        application.add_handler(CommandHandler("formats", self.formats_command))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_url))
+        self.application.add_handler(CommandHandler("start", self.start_command))
+        self.application.add_handler(CommandHandler("status", self.status_command))
+        self.application.add_handler(CommandHandler("cleanup", self.cleanup_command))
+        self.application.add_handler(CommandHandler("formats", self.formats_command))
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_url))
         
-        logger.info("✅ 程序已经正常启动")
+        logger.info("程序已经正常启动")
         
         # 启动机器人
-        application.run_polling()
+        self.application.run_polling()
 
 def main():
     """主函数"""
@@ -755,12 +858,12 @@ def main():
     x_cookies_path = os.getenv('X_COOKIES')
     
     if not bot_token:
-        logger.error("❌ 请设置 TELEGRAM_BOT_TOKEN 环境变量")
+        logger.error("请设置 TELEGRAM_BOT_TOKEN 环境变量")
         sys.exit(1)
     
-    logger.info(f"📁 下载路径: {download_path}")
+    logger.info(f"下载路径: {download_path}")
     if x_cookies_path:
-        logger.info(f"🍪 X Cookies 路径: {x_cookies_path}")
+        logger.info(f"X Cookies 路径: {x_cookies_path}")
     
     # 创建下载器和机器人
     downloader = VideoDownloader(download_path, x_cookies_path)
@@ -770,9 +873,9 @@ def main():
     try:
         bot.run()
     except KeyboardInterrupt:
-        logger.info("👋 机器人已停止")
+        logger.info("机器人已停止")
     except Exception as e:
-        logger.error(f"❌ 机器人运行出错: {str(e)}")
+        logger.error(f"机器人运行出错: {str(e)}")
         sys.exit(1)
 
 if __name__ == '__main__':
