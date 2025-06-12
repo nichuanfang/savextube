@@ -78,7 +78,7 @@ SaveXTube 是一个基于 Telegram 的智能视频下载工具，支持 YouTube�
 ```yaml
 services:
   savextube:
-    image: savextube/savextube:v0.1
+    image: savextube/savextube:v0.2
     container_name: savextube
     restart: unless-stopped
     environment:
