@@ -7,7 +7,7 @@ SaveXTube 是一个基于 Telegram 的智能视频下载工具，支持 YouTube�
 ### 📱 Telegram 机器人集成
 - 简单易用：用户只需发送视频链接即可开始下载
 - 支持多平台：YouTube、X(Twitter) 等主流视频平台
-- YouTbue自动选择最佳视频质量下载
+- YouTube自动选择最佳视频质量下载
 - 即时响应：机器人实时处理下载请求
 - 详细的下载信息展示
 
