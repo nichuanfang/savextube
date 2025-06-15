@@ -45,7 +45,7 @@ SaveXTube 是一个基于 Telegram 的智能视频下载工具，支持 YouTube�
 1. 安装浏览器扩展 **Get cookies.txt LOCALLY**
 2. 访问 X 平台并使用扩展导出 cookies
 3. 将导出的 cookies 保存为 `x_cookies.txt或b_cookies.txt`
-4.导出后的内容如下：
+4. 导出后的内容如下：
 <pre lang="markdown">
 ```txt
 # Netscape HTTP Cookie File
