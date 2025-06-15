@@ -1,12 +1,12 @@
 # SaveXTube - 智能视频下载机器人
 
-SaveXTube 是一个基于 Telegram 的智能视频下载工具，支持 YouTube、X(Twitter) 等主流平台的视频下载，特别针对 NAS 环境进行了优化。
+SaveXTube 是一个基于 Telegram 的智能视频下载工具，支持 YouTube、X(Twitter) 、X站、P站、B站等主流平台的视频下载，特别针对 NAS 环境进行了优化。
 
 ## 🚀 核心功能
 
 ### 📱 Telegram 机器人集成
 - 简单易用：用户只需发送视频链接即可开始下载
-- 支持多平台：YouTube、X(Twitter) 等主流视频平台
+- 支持多平台：YouTube、X(Twitter) 、X站、P站、B站等主流视频平台
 - YouTube自动选择最佳视频质量下载
 - 即时响应：机器人实时处理下载请求
 - 详细的下载信息展示
@@ -44,7 +44,7 @@ SaveXTube 是一个基于 Telegram 的智能视频下载工具，支持 YouTube�
 ### 步骤 2：导出 Cookies
 1. 安装浏览器扩展 **Get cookies.txt LOCALLY**
 2. 访问 X 平台并使用扩展导出 cookies
-3. 将导出的 cookies 保存为 `x_cookies.txt`
+3. 将导出的 cookies 保存为 `x_cookies.txt或b_cookies.txt`
 4.导出后的内容如下：
 <pre lang="markdown">
 ```txt
@@ -60,6 +60,7 @@ SaveXTube 是一个基于 Telegram 的智能视频下载工具，支持 YouTube�
 将 cookies 文件保存到指定路径：
 ```
 /vol1/1000/docker/SaveXTube/x_cookies.txt
+/vol1/1000/docker/SaveXTube/b_cookies.txt
 ```
 
 ### 步骤 4：重启服务
@@ -78,25 +79,31 @@ SaveXTube 是一个基于 Telegram 的智能视频下载工具，支持 YouTube�
 ```yaml
 services:
   savextube:
-    image: savextube/savextube:v0.2
+    image: savextube/savextube:v0.3
     container_name: savextube
     restart: unless-stopped
     environment:
-      # Telegram 机器人 Token（必填）
-      TELEGRAM_BOT_TOKEN: "your_bot_token_here"
-      # 自动转换设置（可选，默认开启）
-      CONVERT_TO_MP4: true
-      # X 平台 Cookies 路径（可选，仅下载 NSFW 内容时需要）
+      TELEGRAM_BOT_TOKEN: XXXXXX
+      CONVERT_TO_MP4: true   # youtube 视频如果是 webm 格式，可以开启自动转换
+      #PROXY_HOST: http://192.168.2.1:7890 #如果使用代理，打开这个注释
       X_COOKIES: /app/x/x_cookies.txt
-      # 容器内下载路径（默认 /downloads）
+      #B_COOKIES: /app/b/b_cookies.txt    #下载b站视频使用，如果用 b 站大会员，也可以下载 4k 视频
       DOWNLOAD_PATH: /downloads
-      # 启用代理（支持 HTTP/HTTPS 代理，格式为http://host:port）
-      PROXY_HOST: http://192.168.2.1:7890
+      #CUSTOM_DOWNLOAD_PATH: false #如果设置 true ，需要设置以下自定义路径，并且下载相应平台的视频存放在对应目录
+      X_DOWNLOAD_PATH: /downloads/x
+      YOUTUBE_DOWNLOAD_PATH: /downloads/youtube
+      #XVIDEOS_DOWNLOAD_PATH: /downloads/xvideos
+      #PORNHUB_DOWNLOAD_PATH: /downloads/pornhub
+      #BILIBILI_DOWNLOAD_PATH= /downloads/bilibili
     volumes:
-      # 下载文件存储路径映射
-      - /vol1/1000/media/downloads/SaveXTube:/downloads
-      # X 平台 Cookies 文件映射（可选）
+      - /vol1/1000/media/downloads/:/downloads/ #默认配置这个自动分类，如果配置了CUSTOM_DOWNLOAD_PATH：true,注释这行，使用以下单独分类目录
       - /vol1/1000/docker/SaveXTube/x_cookies.txt:/app/x/x_cookies.txt
+     # - /vol1/1000/docker/SaveXTube/b_cookies.txt:/app/b/b_cookies.txt
+     # - /vol1/1000/media/downloads/x:/downloads/x #CUSTOM_DOWNLOAD_PATH设置false 的话，要为 x配置单独目录
+     # - /vol1/1000/media/downloads/youtube:/downloads/youtube #CUSTOM_DOWNLOAD_PATH设置true的话，要为 youtube 配置单独目录
+     # - /vol1/1000/media/downloads/xvideos:/downloads/xvideos #CUSTOM_DOWNLOAD_PATH设置true 的话，要为 xvideos 配置单独目录
+     # - /vol1/1000/media/downloads/pornhub:/downloads/pornhub #CUSTOM_DOWNLOAD_PATH设置true 的话，要为 pornhub 配置单独目录
+     # - /vol1/1000/media/downloads/pornhub:/downloads/bilibili #CUSTOM_DOWNLOAD_PATH设置true 的话，要为bilibili配置单独目
 ```
 
 ### 配置说明
@@ -106,8 +113,10 @@ services:
 | `TELEGRAM_BOT_TOKEN` | Telegram 机器人 Token | ✅ 必填 | - |
 | `CONVERT_TO_MP4` | 是否自动转换 webm 为 mp4 | ❌ 可选 | `true` |
 | `X_COOKIES` | X 平台 cookies 文件路径 | ❌ 可选 | - |
+| `B_COOKIES` | B 站 cookies 文件路径 | ❌ 可选 | - |
 | `DOWNLOAD_PATH` | 容器内下载路径 | ❌ 可选 | `/downloads` |
 | `PROXY_HOST` | 启用代理 | ❌ 可选 | - |
+| `CUSTOM_DOWNLOAD_PATH` | 启用自定义目录 | ❌ 可选 | - |
 
 
 ## 📖 使用方法
