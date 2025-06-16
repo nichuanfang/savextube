@@ -131,6 +131,9 @@ services:
 ### 支持的链接格式
 - **YouTube**: `https://www.youtube.com/watch?v=...`
 - **X (Twitter)**: `https://x.com/.../status/...`
+- **B站**: `https://www.bilibili.com/video/BV... 或 https://b23.tv/...`
+- **P站 (Pornhub)**: `https://www.pornhub.com/view_video.php?viewkey=...`
+- **Xvideos**: `https://www.xvideos.com/video...`
 - **其他平台**: 持续更新中...
 
 ### 文件存储结构
