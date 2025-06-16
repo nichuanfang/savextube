@@ -12,6 +12,8 @@ import time
 import threading
 import requests
 import urllib3
+import re
+import uuid
 
 # 禁用 SSL 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -36,6 +38,8 @@ class VideoDownloader:
     def __init__(self, base_download_path: str, x_cookies_path: str = None):
         self.base_download_path = Path(base_download_path)
         self.x_cookies_path = x_cookies_path
+        # 添加 Bilibili cookies 路径
+        self.b_cookies_path = os.getenv('B_COOKIES')
         
         # 从环境变量获取代理配置
         self.proxy_host = os.getenv('PROXY_HOST')
@@ -68,15 +72,39 @@ class VideoDownloader:
         self.convert_to_mp4 = os.getenv('CONVERT_TO_MP4', 'true').lower() == 'true'
         logger.info(f"视频格式转换: {'开启' if self.convert_to_mp4 else '关闭'}")
         
-        # 创建下载目录
-        self.x_download_path = self.base_download_path / "x"
-        self.youtube_download_path = self.base_download_path / "youtube"
+        # 支持自定义下载目录
+        self.custom_download_path = os.getenv('CUSTOM_DOWNLOAD_PATH', 'false').lower() == 'true'
+        if self.custom_download_path:
+            self.x_download_path = Path(os.getenv('X_DOWNLOAD_PATH', '/downloads/x'))
+            self.youtube_download_path = Path(os.getenv('YOUTUBE_DOWNLOAD_PATH', '/downloads/youtube'))
+            self.xvideos_download_path = Path(os.getenv('XVIDEOS_DOWNLOAD_PATH', '/downloads/xvideos'))
+            self.pornhub_download_path = Path(os.getenv('PORNHUB_DOWNLOAD_PATH', '/downloads/pornhub'))
+            # 添加 Bilibili 下载路径
+            self.bilibili_download_path = Path(os.getenv('BILIBILI_DOWNLOAD_PATH', '/downloads/bilibili'))
+        else:
+            self.x_download_path = self.base_download_path / "x"
+            self.youtube_download_path = self.base_download_path / "youtube"
+            self.xvideos_download_path = self.base_download_path / "xvideos"
+            self.pornhub_download_path = self.base_download_path / "pornhub"
+            # 添加 Bilibili 下载路径
+            self.bilibili_download_path = self.base_download_path / "bilibili"
         
+        # 创建所有下载目录
         self.x_download_path.mkdir(parents=True, exist_ok=True)
         self.youtube_download_path.mkdir(parents=True, exist_ok=True)
+        self.xvideos_download_path.mkdir(parents=True, exist_ok=True)
+        self.pornhub_download_path.mkdir(parents=True, exist_ok=True)
+        self.bilibili_download_path.mkdir(parents=True, exist_ok=True)
         
         logger.info(f"X 下载路径: {self.x_download_path}")
         logger.info(f"YouTube 下载路径: {self.youtube_download_path}")
+        logger.info(f"Xvideos 下载路径: {self.xvideos_download_path}")
+        logger.info(f"Pornhub 下载路径: {self.pornhub_download_path}")
+        logger.info(f"Bilibili 下载路径: {self.bilibili_download_path}")
+        
+        # 如果设置了 Bilibili cookies，记录日志
+        if self.b_cookies_path:
+            logger.info(f"Bilibili Cookies 路径: {self.b_cookies_path}")
         
     def _test_proxy_connection(self) -> bool:
         """测试代理服务器连接"""
@@ -111,12 +139,33 @@ class VideoDownloader:
         parsed = urlparse(url)
         return parsed.netloc.lower() in ['youtube.com', 'www.youtube.com', 'youtu.be', 'm.youtube.com']
     
+    def is_xvideos_url(self, url: str) -> bool:
+        """检查是否为 xvideos URL"""
+        parsed = urlparse(url)
+        return any(domain in parsed.netloc for domain in ['xvideos.com', 'www.xvideos.com'])
+    
+    def is_pornhub_url(self, url: str) -> bool:
+        """检查是否为 pornhub URL"""
+        parsed = urlparse(url)
+        return any(domain in parsed.netloc for domain in ['pornhub.com', 'www.pornhub.com', 'cn.pornhub.com'])
+    
+    def is_bilibili_url(self, url: str) -> bool:
+        """检查是否为 Bilibili URL"""
+        parsed = urlparse(url)
+        return parsed.netloc.lower() in ['bilibili.com', 'www.bilibili.com', 'b23.tv']
+    
     def get_download_path(self, url: str) -> Path:
         """根据 URL 确定下载路径"""
         if self.is_x_url(url):
             return self.x_download_path
         elif self.is_youtube_url(url):
             return self.youtube_download_path
+        elif self.is_xvideos_url(url):
+            return self.xvideos_download_path
+        elif self.is_pornhub_url(url):
+            return self.pornhub_download_path
+        elif self.is_bilibili_url(url):
+            return self.bilibili_download_path
         else:
             return self.youtube_download_path
     
@@ -126,6 +175,12 @@ class VideoDownloader:
             return "x"
         elif self.is_youtube_url(url):
             return "youtube"
+        elif self.is_xvideos_url(url):
+            return "xvideos"
+        elif self.is_pornhub_url(url):
+            return "pornhub"
+        elif self.is_bilibili_url(url):
+            return "bilibili"
         else:
             return "other"
     
@@ -225,46 +280,17 @@ class VideoDownloader:
             return original_filename
     
     async def download_video(self, url: str, message_updater=None) -> Dict[str, Any]:
-        """下载视频 - 使用简化的进度更新方式"""
         download_path = self.get_download_path(url)
         platform = self.get_platform_name(url)
-        
-        # 生成唯一的文件名前缀，避免冲突
         import time
         timestamp = int(time.time())
-        
-        # 设置 yt-dlp 选项 - 根据平台优化格式选择
-        if self.is_youtube_url(url):
-            # 首先尝试获取视频信息
-            try:
-                with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
-                    info = ydl.extract_info(url, download=False)
-                    # 获取所有可用的格式
-                    formats = info.get('formats', [])
-                    logger.info("可用的视频格式:")
-                    for f in formats:
-                        if f.get('height'):
-                            logger.info(f"格式: {f.get('format_id')} - {f.get('height')}p - {f.get('ext')}")
-                    
-                    # 选择最佳视频和音频流
-                    video_streams = [f for f in formats if f.get('vcodec') != 'none' and f.get('acodec') == 'none' and f.get('height')]
-                    audio_streams = [f for f in formats if f.get('acodec') != 'none' and f.get('vcodec') == 'none']
-                    
-                    if video_streams and audio_streams:
-                        best_video = max(video_streams, key=lambda f: f.get('height', 0))
-                        best_audio = max(audio_streams, key=lambda f: f.get('abr', 0) if f.get('abr') else 0)
-                        best_format = f"{best_video['format_id']}+{best_audio['format_id']}"
-                        logger.info(f"自动选择最佳格式: {best_format} ({best_video.get('height')}p, {best_video.get('ext')})")
-                    else:
-                        best_format = 'best'
-                        logger.info("使用默认最佳格式")
-            except Exception as e:
-                logger.error(f"获取视频信息失败: {e}")
-                best_format = 'best'
-            
+
+        # X 平台单独处理
+        if self.is_x_url(url):
+            outtmpl = str(download_path / "%(id)s.%(ext)s")
             ydl_opts = {
-                'outtmpl': str(download_path / f'{timestamp}_%(title)s.%(ext)s'),
-                'format': best_format,
+                'outtmpl': outtmpl,
+                'format': 'best',
                 'writeinfojson': False,
                 'writedescription': False,
                 'writesubtitles': False,
@@ -278,40 +304,75 @@ class VideoDownloader:
                 'skip_unavailable_fragments': True,
                 'nocheckcertificate': True,
                 'prefer_insecure': True,
+                'merge_output_format': 'mp4',
+                'postprocessors': [{
+                    'key': 'FFmpegVideoConvertor',
+                    'preferedformat': 'mp4',
+                }],
                 'http_headers': {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.5',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'DNT': '1',
-                    'Connection': 'keep-alive',
-                    'Upgrade-Insecure-Requests': '1',
-                    'Sec-Fetch-Dest': 'document',
-                    'Sec-Fetch-Mode': 'navigate',
-                    'Sec-Fetch-Site': 'none',
-                    'Sec-Fetch-User': '?1',
-                    'Pragma': 'no-cache',
-                    'Cache-Control': 'no-cache',
                 }
             }
-            
-            # 根据配置决定是否添加转换选项
-            if self.convert_to_mp4:
-                ydl_opts.update({
-                    'merge_output_format': 'mp4',
-                    'postprocessors': [{
-                        'key': 'FFmpegVideoConvertor',
-                        'preferedformat': 'mp4',
-                    }]
-                })
-                logger.info("已启用视频格式转换为 MP4")
-            else:
-                logger.info("保持原始视频格式")
+            if self.x_cookies_path and os.path.exists(self.x_cookies_path):
+                ydl_opts['cookiefile'] = self.x_cookies_path
+                logger.info(f"使用 X cookies: {self.x_cookies_path}")
+            # ... 其余 X 平台下载流程不变 ...
+        elif self.is_bilibili_url(url):
+            # extract_info
+            with yt_dlp.YoutubeDL({'quiet': True, 'cookiefile': self.b_cookies_path if self.b_cookies_path else None}) as ydl:
+                info = ydl.extract_info(url, download=False)
+                title = info.get('title') or 'bilibili'
+                title = re.sub(r'[\\/:*?"<>|]', '', title).strip() or 'bilibili'
+                outtmpl = str(download_path / f"{title}.%(ext)s")
+                formats = info.get('formats', [])
+                video_streams = [f for f in formats if f.get('vcodec') != 'none' and f.get('acodec') == 'none']
+                audio_streams = [f for f in formats if f.get('acodec') != 'none' and f.get('vcodec') == 'none']
+                best_video = max(video_streams, key=lambda f: f.get('height', 0), default=None)
+                best_audio = max(audio_streams, key=lambda f: f.get('abr', 0) if f.get('abr') else 0, default=None)
+                combo_format = f"{best_video['format_id']}+{best_audio['format_id']}" if best_video and best_audio else 'best'
+            ydl_opts = {
+                'outtmpl': outtmpl,
+                'format': combo_format,
+                'writeinfojson': False,
+                'writedescription': False,
+                'writesubtitles': False,
+                'writeautomaticsub': False,
+                'nooverwrites': True,
+                'restrictfilenames': True,
+                'socket_timeout': 30,
+                'retries': 10,
+                'fragment_retries': 10,
+                'extractor_retries': 10,
+                'skip_unavailable_fragments': True,
+                'nocheckcertificate': True,
+                'prefer_insecure': True,
+                'merge_output_format': 'mp4',
+                'postprocessors': [{
+                    'key': 'FFmpegVideoConvertor',
+                    'preferedformat': 'mp4',
+                }],
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                }
+            }
+            if self.b_cookies_path and os.path.exists(self.b_cookies_path):
+                ydl_opts['cookiefile'] = self.b_cookies_path
+                logger.info(f"使用 Bilibili cookies: {self.b_cookies_path}")
         else:
-            # X (Twitter) 和其他平台配置
+            # 其它平台
+            with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+                info = ydl.extract_info(url, download=False)
+                title = info.get('title')
+                if not title or not title.strip():
+                    logger.warning(f"未获取到视频标题，使用默认命名: {url}")
+                    title = platform
+                title = re.sub(r'[\\/:*?"<>|]', '', title)
+                title = title.strip() or platform
+                outtmpl = str(download_path / f"{title}.%(ext)s")
+
             ydl_opts = {
-                'outtmpl': str(download_path / f'{timestamp}_%(title)s.%(ext)s'),
-                'format': 'best',  # 对X平台使用简单的格式选择
+                'outtmpl': outtmpl,
+                'format': 'best',
                 'writeinfojson': False,
                 'writedescription': False,
                 'writesubtitles': False,
@@ -325,36 +386,29 @@ class VideoDownloader:
                 'skip_unavailable_fragments': True,
                 'nocheckcertificate': True,
                 'prefer_insecure': True,
+                'merge_output_format': 'mp4',
+                'postprocessors': [{
+                    'key': 'FFmpegVideoConvertor',
+                    'preferedformat': 'mp4',
+                }],
                 'http_headers': {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.5',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'DNT': '1',
-                    'Connection': 'keep-alive',
-                    'Upgrade-Insecure-Requests': '1',
-                    'Sec-Fetch-Dest': 'document',
-                    'Sec-Fetch-Mode': 'navigate',
-                    'Sec-Fetch-Site': 'none',
-                    'Sec-Fetch-User': '?1',
-                    'Pragma': 'no-cache',
-                    'Cache-Control': 'no-cache',
                 }
             }
-        
-        # 添加代理配置（如果设置了代理）
+            # Bilibili cookies
+            if self.is_bilibili_url(url) and self.b_cookies_path and os.path.exists(self.b_cookies_path):
+                ydl_opts['cookiefile'] = self.b_cookies_path
+                logger.info(f"使用 Bilibili cookies: {self.b_cookies_path}")
+            # ... 其余下载流程同原有（如 run_download、进度钩子等） ...
+
+        # 3. 添加代理配置（如果设置了代理）
         if self.proxy_host:
             ydl_opts['proxy'] = self.proxy_host
             logger.info(f"使用代理服务器下载: {self.proxy_host}")
         else:
             logger.info("未使用代理服务器，直接连接下载")
-        
-        # 如果是 X URL 且有 cookies，添加 cookies 配置
-        if self.is_x_url(url) and self.x_cookies_path and os.path.exists(self.x_cookies_path):
-            ydl_opts['cookiefile'] = self.x_cookies_path
-            logger.info(f"使用 X cookies: {self.x_cookies_path}")
-        
-        # 进度信息 - 使用线程安全的方式
+
+        # 4. 添加进度钩子
         progress_data = {
             'filename': '',
             'total_bytes': 0,
@@ -363,59 +417,43 @@ class VideoDownloader:
             'status': 'downloading',
             'final_filename': '',
             'last_update': 0,
-            'lock': threading.Lock()
+            'lock': threading.Lock(),
+            'progress': 0.0
         }
-        
         def progress_hook(d):
             try:
                 with progress_data['lock']:
                     current_time = time.time()
-                    
                     if d['status'] == 'downloading':
                         raw_filename = d.get('filename', '')
                         display_filename = os.path.basename(raw_filename) if raw_filename else 'video.mp4'
-                        
                         progress_data.update({
                             'filename': display_filename,
                             'total_bytes': d.get('total_bytes') or d.get('total_bytes_estimate', 0),
                             'downloaded_bytes': d.get('downloaded_bytes', 0),
                             'speed': d.get('speed', 0),
-                            'status': 'downloading'
+                            'status': 'downloading',
+                            'progress': (d.get('downloaded_bytes', 0) / (d.get('total_bytes') or d.get('total_bytes_estimate', 1))) * 100 if (d.get('total_bytes') or d.get('total_bytes_estimate', 0)) > 0 else 0.0
                         })
-                        
-                        # 每1秒更新一次进度
                         if current_time - progress_data['last_update'] > 1.0:
                             progress_data['last_update'] = current_time
-                            
                             if message_updater:
-                                # 直接在当前线程调用更新函数，避免事件循环问题
-                                try:
-                                    message_updater(progress_data.copy())
-                                except Exception as e:
-                                    logger.error(f"进度更新回调失败: {e}")
-                        
+                                message_updater(progress_data.copy())
                     elif d['status'] == 'finished':
                         final_filename = d.get('filename', '')
                         display_filename = os.path.basename(final_filename) if final_filename else 'video.mp4'
-                        
                         progress_data.update({
                             'filename': display_filename,
                             'status': 'finished',
                             'final_filename': final_filename,
                             'progress': 100.0
                         })
-                        
                         if message_updater:
-                            try:
-                                message_updater(progress_data.copy())
-                            except Exception as e:
-                                logger.error(f"完成更新回调失败: {e}")
-                        
+                            message_updater(progress_data.copy())
             except Exception as e:
                 logger.error(f"进度钩子错误: {str(e)}")
-        
         ydl_opts['progress_hooks'] = [progress_hook]
-        
+
         def run_download():
             """下载视频"""
             try:
@@ -444,6 +482,12 @@ class VideoDownloader:
             loop = asyncio.get_running_loop()
             success = await loop.run_in_executor(None, run_download)
             
+            # 下载完成后兜底推送一次"完成"消息（防止小文件只触发一次进度）
+            if progress_data['status'] != 'finished' and message_updater:
+                progress_data['status'] = 'finished'
+                progress_data['progress'] = 100.0
+                message_updater(progress_data.copy())
+
             if not success:
                 return {'success': False, 'error': '下载失败'}
             
@@ -455,20 +499,32 @@ class VideoDownloader:
             downloaded_file = None
             file_size = 0
             original_filename = ""
-            
+
             if final_file and os.path.exists(final_file):
                 downloaded_file = final_file
                 file_size = os.path.getsize(final_file)
                 original_filename = os.path.basename(final_file)
             else:
-                # 搜索带时间戳的最新文件
+                logger.warning("未能通过 progress_hook 获取最终文件名，尝试目录查找")
                 try:
                     video_files = []
-                    for ext in ['*.mp4', '*.mkv', '*.webm', '*.mov', '*.avi']:
-                        video_files.extend(download_path.glob(f'{timestamp}_*{ext[1:]}'))
-                    
+                    if self.is_x_url(url):
+                        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+                            info = ydl.extract_info(url, download=False)
+                            video_id = info.get('id', 'x')
+                        for ext in ['*.mp4', '*.mkv', '*.webm', '*.mov', '*.avi']:
+                            video_files.extend(download_path.glob(f"{video_id}{ext[1:]}"))
+                    else:
+                        for ext in ['*.mp4', '*.mkv', '*.webm', '*.mov', '*.avi']:
+                            video_files.extend(download_path.glob(ext))
                     if video_files:
-                        latest_file = max(video_files, key=lambda f: f.stat().st_mtime)
+                        import time
+                        now = time.time()
+                        recent_files = [f for f in video_files if now - f.stat().st_mtime < 3600]
+                        if recent_files:
+                            latest_file = max(recent_files, key=lambda f: f.stat().st_mtime)
+                        else:
+                            latest_file = max(video_files, key=lambda f: f.stat().st_mtime)
                         downloaded_file = str(latest_file)
                         file_size = latest_file.stat().st_size
                         original_filename = latest_file.name
@@ -477,7 +533,7 @@ class VideoDownloader:
             
             if downloaded_file and os.path.exists(downloaded_file):
                 file_size_mb = file_size / (1024 * 1024)
-                display_filename = self._generate_display_filename(original_filename, timestamp)
+                display_filename = progress_data.get('filename', original_filename)
                 # 获取分辨率信息
                 video_width = None
                 video_height = None
@@ -492,6 +548,22 @@ class VideoDownloader:
                 except Exception as e:
                     logger.warning(f"获取分辨率失败: {e}")
                 resolution = f"{video_width}x{video_height}" if video_width and video_height else "未知"
+                if video_height:
+                    if video_height >= 2160:
+                        resolution += " (2160p)"
+                    elif video_height >= 1440:
+                        resolution += " (1440p)"
+                    elif video_height >= 1080:
+                        resolution += " (1080p)"
+                    elif video_height >= 720:
+                        resolution += " (720p)"
+                    elif video_height >= 480:
+                        resolution += " (480p)"
+                    elif video_height >= 360:
+                        resolution += " (360p)"
+                    else:
+                        resolution += " (240p)"
+                
                 return {
                     'success': True,
                     'filename': display_filename,
@@ -512,14 +584,15 @@ class VideoDownloader:
 class TelegramBot:
     def __init__(self, token: str, downloader: VideoDownloader):
         self.downloader = downloader
-        # 配置 Telegram Bot 的代理
         if self.downloader.proxy_host:
             logger.info(f"Telegram Bot 使用代理: {self.downloader.proxy_host}")
             self.application = Application.builder().token(token).proxy(self.downloader.proxy_host).build()
         else:
             logger.info("Telegram Bot 直接连接")
             self.application = Application.builder().token(token).build()
-        self.active_downloads = {}
+        self.active_downloads = {}  # task_id: True
+        self.progress_data = {}     # task_id: progress_data dict
+        self.progress_message = {}  # task_id: telegram message object
         
     async def version_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 /version 命令 - 显示版本信息"""
@@ -687,127 +760,114 @@ YouTube 视频: {len(youtube_files)} 个文件
             await update.message.reply_text(f"获取状态失败: {str(e)}")
     
     async def handle_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """处理 URL 消息"""
         url = update.message.text.strip()
-        
-        # 验证 URL 格式
         if not url.startswith(('http://', 'https://')):
-            await update.message.reply_text("请发送有效的视频链接")
+            url = self.downloader.extract_douyin_url(url)
+            if not url:
+                await update.message.reply_text("请发送有效的视频链接")
+                return
+        if not (self.downloader.is_x_url(url) or 
+                self.downloader.is_youtube_url(url) or
+                self.downloader.is_xvideos_url(url) or 
+                self.downloader.is_pornhub_url(url) or
+                self.downloader.is_bilibili_url(url) or
+                self.downloader.is_douyin_url(url)):
+            await update.message.reply_text("目前只支持 X (Twitter)、YouTube、xvideos、pornhub、bilibili 和抖音链接")
             return
-        
-        # 检查是否支持的平台
-        if not (self.downloader.is_x_url(url) or self.downloader.is_youtube_url(url)):
-            await update.message.reply_text("目前只支持 X (Twitter) 和 YouTube 链接")
-            return
-        
-        chat_id = update.effective_chat.id
-        
-        # 检查是否有正在进行的下载
-        if chat_id in self.active_downloads:
-            await update.message.reply_text("有下载任务正在进行中，请等待完成后再试")
-            return
-        
-        platform = "X" if self.downloader.is_x_url(url) else "YouTube"
-        
-        # 发送开始下载消息
-        progress_message = await update.message.reply_text(f"开始下载 {platform} 视频...")
-        
-        # 获取当前事件循环引用
+
+        # 生成唯一 task_id
+        task_id = str(uuid.uuid4())
+        self.active_downloads[task_id] = True
+        self.progress_data[task_id] = {}
+        progress_message = await update.message.reply_text(f"开始下载 {self.downloader.get_platform_name(url)} 视频...")
+        self.progress_message[task_id] = progress_message
         current_loop = asyncio.get_running_loop()
-        
-        # 创建线程安全的进度更新器
+
         def update_progress(progress_info):
-            """线程安全的进度更新函数"""
             try:
+                self.progress_data[task_id] = progress_info.copy()
                 filename = progress_info.get('filename', 'video.mp4')
                 total_bytes = progress_info.get('total_bytes', 0)
                 downloaded_bytes = progress_info.get('downloaded_bytes', 0)
                 speed = progress_info.get('speed', 0)
                 status = progress_info.get('status', 'downloading')
-                
-                # 生成用户友好的文件名显示
+                eta_text = ""
+                if speed and total_bytes and downloaded_bytes < total_bytes:
+                    remaining = total_bytes - downloaded_bytes
+                    eta = int(remaining / speed)
+                    mins, secs = divmod(eta, 60)
+                    if mins > 0:
+                        eta_text = f"{mins}分{secs}秒"
+                    else:
+                        eta_text = f"{secs}秒"
+                elif speed:
+                    eta_text = "计算中"
+                else:
+                    eta_text = "未知"
                 display_filename = self._clean_filename_for_display(filename)
-                
                 if status == 'finished' or progress_info.get('progress') == 100.0:
                     progress = 100.0
                     progress_bar = self._create_progress_bar(progress)
                     size_mb = total_bytes / (1024 * 1024) if total_bytes > 0 else downloaded_bytes / (1024 * 1024)
-                    
-                    progress_text = f"""📝 文件：{display_filename}
-💾 大小：{size_mb:.2f}MB
-⚡ 速度：完成
-📊 进度：{progress_bar} ({progress:.1f}%)"""
-                    
-                    # 使用事件循环引用安全更新
+                    progress_text = (
+                        f"📝 文件：{display_filename}\n"
+                        f"💾 大小：{size_mb:.2f}MB\n"
+                        f"⚡ 速度：完成\n"
+                        f"⏳ 预计剩余：0秒\n"
+                        f"📊 进度：{progress_bar} ({progress:.1f}%)"
+                    )
                     asyncio.run_coroutine_threadsafe(
-                        progress_message.edit_text(progress_text),
+                        self.progress_message[task_id].edit_text(progress_text),
                         current_loop
                     )
                     return
-                
                 if total_bytes > 0:
                     progress = (downloaded_bytes / total_bytes) * 100
                     progress_bar = self._create_progress_bar(progress)
-                    
                     size_mb = total_bytes / (1024 * 1024)
                     speed_mb = (speed or 0) / (1024 * 1024)
-                    
-                    progress_text = f"""📝 文件：{display_filename}
-💾 大小：{size_mb:.2f}MB
-⚡ 速度：{speed_mb:.2f}MB/s
-📊 进度：{progress_bar} ({progress:.1f}%)"""
-                    
-                    # 使用事件循环引用安全更新
+                    progress_text = (
+                        f"📝 文件：{display_filename}\n"
+                        f"💾 大小：{size_mb:.2f}MB\n"
+                        f"⚡ 速度：{speed_mb:.2f}MB/s\n"
+                        f"⏳ 预计剩余：{eta_text}\n"
+                        f"📊 进度：{progress_bar} ({progress:.1f}%)"
+                    )
                     asyncio.run_coroutine_threadsafe(
-                        progress_message.edit_text(progress_text),
+                        self.progress_message[task_id].edit_text(progress_text),
                         current_loop
                     )
                 else:
-                    # 没有总大小信息时的显示
                     downloaded_mb = downloaded_bytes / (1024 * 1024) if downloaded_bytes > 0 else 0
                     speed_mb = (speed or 0) / (1024 * 1024)
-                    
-                    progress_text = f"""📝 文件：{display_filename}
-💾 大小：{downloaded_mb:.2f}MB
-⚡ 速度：{speed_mb:.2f}MB/s
-📊 进度：下载中..."""
-                    
+                    progress_text = (
+                        f"📝 文件：{display_filename}\n"
+                        f"💾 大小：{downloaded_mb:.2f}MB\n"
+                        f"⚡ 速度：{speed_mb:.2f}MB/s\n"
+                        f"⏳ 预计剩余：未知\n"
+                        f"📊 进度：下载中..."
+                    )
                     asyncio.run_coroutine_threadsafe(
-                        progress_message.edit_text(progress_text),
+                        self.progress_message[task_id].edit_text(progress_text),
                         current_loop
                     )
-                    
             except Exception as e:
                 logger.error(f"进度更新失败: {e}")
-        
-        # 标记下载开始
-        self.active_downloads[chat_id] = True
-        
+
         try:
-            # 开始下载，传入进度更新函数
             result = await self.downloader.download_video(url, update_progress)
-            
-            if result['success']:
-                # 生成用户友好的文件名显示
-                display_filename = self._clean_filename_for_display(result['filename'])
-                resolution = result.get('resolution', '未知')
-                completion_text = f"""下载完成!
-📝 文件名：{display_filename}
-📂 保存位置：{result['platform']} 文件夹
-💾 文件大小：{result['size_mb']}MB
-🎥 分辨率：{resolution}
-✅ 进度：████████████████████ (100%)"""
-                
-                await progress_message.edit_text(completion_text)
-            else:
-                await progress_message.edit_text(f"下载失败：{result['error']}")
-                
+            progress_info = self.progress_data.get(task_id, {})
+            display_filename = self._clean_filename_for_display(result.get('filename', progress_info.get('filename', 'video.mp4')))
+            resolution = result.get('resolution', '未知')
+            completion_text = f"""下载完成!\n📝 文件名：{display_filename}\n📂 保存位置：{result.get('platform', '未知')} 文件夹\n💾 文件大小：{result.get('size_mb', 0)}MB\n🎥 分辨率：{resolution}\n✅ 进度：████████████████████ (100%)"""
+            await self.progress_message[task_id].edit_text(completion_text)
         except Exception as e:
             logger.error(f"下载过程中发生错误: {str(e)}")
-            await progress_message.edit_text(f"下载失败：{str(e)}")
+            await self.progress_message[task_id].edit_text(f"下载失败：{str(e)}")
         finally:
-            # 清除下载标记
-            self.active_downloads.pop(chat_id, None)
+            self.active_downloads.pop(task_id, None)
+            self.progress_data.pop(task_id, None)
+            self.progress_message.pop(task_id, None)
     
     def _clean_filename_for_display(self, filename):
         """清理文件名用于显示"""
@@ -880,3 +940,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+
