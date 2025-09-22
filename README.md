@@ -1,186 +1,372 @@
-# SaveXTube - 智能视频下载机器人
+# SaveXTube - 智能多媒体下载机器人
 
-SaveXTube 是一个基于 Telegram 的智能视频下载工具，支持 YouTube、X(Twitter) 、X站、P站、B站等主流平台的视频下载，特别针对 NAS 环境进行了优化。
+SaveXTube 是一个基于 Telegram 的智能多媒体下载工具，支持视频、音乐、磁力链接等多种内容下载，特别针对 NAS 环境进行了优化。
 
 ## 🚀 核心功能
 
 ### 📱 Telegram 机器人集成
-- 简单易用：用户只需发送视频链接即可开始下载
-- 支持多平台：YouTube、X(Twitter) 、X站、P站、B站等主流视频平台
-- YouTube自动选择最佳视频质量下载
-- 即时响应：机器人实时处理下载请求
-- 详细的下载信息展示
+- **简单易用**：用户只需发送链接即可开始下载
+- **多平台支持**：支持主流视频、音乐、社交平台
+- **智能识别**：自动识别链接类型并选择最佳下载方式
+- **实时响应**：机器人实时处理下载请求
+- **详细反馈**：提供详细的下载信息和进度显示
 
 ### 📊 实时进度显示
-- **文件信息**：显示视频标题、文件大小
-- **下载进度**：实时更新的进度条
+- **文件信息**：显示标题、大小、格式等详细信息
+- **下载进度**：实时更新的进度条和百分比
 - **传输状态**：显示下载速度和剩余时间
+- **质量信息**：显示视频分辨率和音频质量
 
 ### 🐳 Docker 容器化部署
-- 完整容器化解决方案，轻松部署到 NAS
-- 灵活的路径配置，适应不同存储需求
-- 支持热重启，配置更新无需停机
+- **完整容器化**：一键部署，无需复杂配置
+- **灵活配置**：支持TOML配置文件和环境变量
+- **热重启**：配置更新无需停机
+- **资源优化**：针对NAS环境优化资源使用
 
 ### 📂 智能分类存储
-- **自动分类**：根据视频来源自动分类存储
-  - X 平台视频 → `/downloads/x/`
-  - YouTube 视频 → `/downloads/youtube/`
+- **自动分类**：根据内容来源自动分类存储
 - **路径自定义**：支持自定义下载目录结构
+- **格式识别**：自动识别并分类不同格式文件
+- **灵活配置**：支持TOML配置文件和环境变量自定义路径
+
+### 🎵 音乐下载支持
+- **网易云音乐**：支持高质量音乐下载，包含歌词和封面
+- **QQ音乐**：支持高品质音乐下载
+- **Apple Music**：支持无损音乐下载
+- **YouTube Music**：支持音频模式下载
+
+### 🎬 视频下载支持
+- **YouTube**：支持最高4K分辨率，自动选择最佳质量，支持播放列表、频道视频下载
+- **B站 (Bilibili)**：支持大会员内容，包含弹幕下载，支持播放列表、频道视频下载
+- **X (Twitter)**：支持NSFW内容，通过Cookies认证
+- **抖音/快手/微博视频/头条视频/小红书**：支持短视频下载
+- **Instagram/Facebook**：支持社交媒体视频
+- **P站/Xvideos**：支持成人内容平台
+- **Telegram**：支持Telegram频道内容
+
+### 🖼️ 图片下载支持
+- **X (Twitter)**：支持单张及多张图片下载
+- **小红书**：支持无水印图片下载
+- **Telegraph**：支持Telegraph图片下载
+
+### 🔗 磁力链接与种子下载
+- **qBittorrent集成**：支持磁力链接和种子文件下载
+- **自动添加**：发送磁力链接自动添加到qBittorrent
+- **进度跟踪**：实时显示下载进度和状态
+- **智能分类**：自动为下载任务添加标签
+
+### 📚 B站收藏夹订阅
+- **自动订阅**：订阅B站收藏夹，自动下载新视频
+- **定时检查**：可配置检查间隔，自动发现新内容
+- **批量下载**：支持收藏夹内所有视频批量下载
+- **智能管理**：支持订阅列表管理和手动下载
 
 ### 🔄 格式自动转换
-- **智能转换**：YouTube webm 格式自动转换为通用的 mp4 格式
-- **质量保证**：转换过程保持原视频质量
+- **智能转换**：YouTube webm格式自动转换为mp4
+- **质量保证**：转换过程保持原内容质量
 - **可配置**：支持开启/关闭自动转换功能
 
-### 🔞 NSFW 内容支持
-- 通过 Cookies 映射支持 X 平台的受限内容下载
-- 安全的认证方式，保护用户隐私
+## 
 
-## 🍪 X Platform Cookies 配置
+### 🔧 Cookies 获取方法
 
-### 步骤 1：登录 X 账户
-在浏览器中登录您的 X (Twitter) 账户
+**所有平台都使用相同的获取方法：**
 
-### 步骤 2：导出 Cookies
-1. 安装浏览器扩展 **Get cookies.txt LOCALLY**
-2. 访问 X 平台并使用扩展导出 cookies
-3. 将导出的 cookies 保存为 `x_cookies.txt或b_cookies.txt`
-4. 导出后的内容如下：
-<pre lang="markdown">
-```txt
-# Netscape HTTP Cookie File
-# http://curl.haxx.se/rfc/cookie_spec.html
-# This is a generated file! Do not edit.
+1. **安装浏览器扩展**
+   
+   - 安装 "Get cookies.txt LOCALLY" 扩展
+   - 支持 Chrome、Firefox、Edge 等主流浏览器
+   
+2. **登录目标平台**
+   - 在浏览器中登录对应的平台账户
+   - 确保账户有相应的会员权限（如需要）
 
-.x.com     TRUE     /     TRUE     11111111111     XXX     XXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-```
-</pre>
+3. **导出Cookies**
+   - 访问目标平台网站
+   - 点击 "Get cookies.txt LOCALLY" 扩展图标
+   - 选择 "Copy" 复制cookies内容
+   - 保存为对应的文件名（见上表）
 
-### 步骤 3：配置 Cookies 路径
-将 cookies 文件保存到指定路径：
-```
-/vol1/1000/docker/SaveXTube/x_cookies.txt
-/vol1/1000/docker/SaveXTube/b_cookies.txt
-```
+4. **Cookies文件格式**
+   ```
+   # Netscape HTTP Cookie File
+   # http://curl.haxx.se/rfc/cookie_spec.html
+   # This is a generated file! Do not edit.
+   
+   .example.com     TRUE     /     TRUE     11111111111     SESSION_ID     XXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+   ```
 
-### 步骤 4：重启服务
-重启 SaveXTube 容器以加载新的 cookies 配置
+## 🍪 Cookies 配置
+
+### 📋 支持的平台和Cookies文件
+
+| 平台               | 文件名                   | 路径                                   |                                       |
+| ------------------ | ------------------------ | -------------------------------------- | ------------------------------------- |
+| **X (Twitter)**    | `x_cookies.txt`          | `/app/cookies/x_cookies.txt`           | 用于下载X平台的NSFW内容和受限视频内容 |
+| **X (Twitter)**    | x_gallerydl.txt          | `/app/cookies/x_gallerydl.txt `        | 用于下载X平台的NSFW内容和受限图片内容 |
+| **B站 (Bilibili)** | `bilibili_cookies.txt`   | `/app/cookies/bilibili_cookies.txt`    | 用于下载B站大会员内容和4K视频         |
+| **YouTube**        | `youtube_cookies.txt`    | `/app/cookies/youtube_cookies.txt`     | 用于下载YouTube受限内容和提高下载速度 |
+| **抖音 (Douyin)**  | `douyin_cookies.txt`     | `/app/cookies/douyin_cookies.txt`      | 用于下载抖音高质量视频                |
+| **Instagram**      | `instagram_cookies.txt`  | `/app/cookies/instagram_cookies.txt`   | 用于下载Instagram内容和图片           |
+| **Apple Music**    | `applemusic_cookies.txt` | `/app/cookies/apple_music_cookies.txt` | 用于下载Apple Music无损音乐           |
+| **网易云音乐**     | `ncm_cookies.txt`        | `/app/cookies/ncm_cookies.txt`         | 用于下载网易云音乐VIP内容和高质量音乐 |
+| **QQ音乐**         | `qqmusic_cookies.txt`    | `/app/cookies/qqmusic_cookies.txt`     | 用于下载QQ音乐VIP内容和高质量音乐     |
+| **Telegram**       | `telethon_session.txt`   | `/app/cookies/telethon_session.txt`    | 用于下载TG频道上的视频以及音频        |
 
 ## 🤖 创建 Telegram 机器人
 
-### 获取 Bot Token
-1. 在 Telegram 中搜索 **@BotFather**
-2. 发送 `/newbot` 命令创建新机器人
+1. 在Telegram中搜索**@BotFather**
+2. 发送`/newbot`命令创建新机器人
 3. 按照提示设置机器人名称和用户名
-4. 记录生成的 **Bot Token**，后续配置需要使用
+4. 记录生成的**Bot Token**
 
 ## 🚀 Docker Compose 部署
 
 ```yaml
 services:
   savextube:
-    image: savextube/savextube:v0.3
+    image: savextube/savextube:latest
     container_name: savextube
     restart: unless-stopped
     environment:
-      TELEGRAM_BOT_TOKEN: XXXXXX
-      CONVERT_TO_MP4: true   # youtube 视频如果是 webm 格式，可以开启自动转换
-      #PROXY_HOST: http://192.168.2.1:7890 #如果使用代理，打开这个注释
-      X_COOKIES: /app/x/x_cookies.txt
-      #B_COOKIES: /app/b/b_cookies.txt    #下载b站视频使用，如果用 b 站大会员，也可以下载 4k 视频
-      DOWNLOAD_PATH: /downloads
-      #CUSTOM_DOWNLOAD_PATH: false #如果设置 true ，需要设置以下自定义路径，并且下载相应平台的视频存放在对应目录
-      X_DOWNLOAD_PATH: /downloads/x
-      YOUTUBE_DOWNLOAD_PATH: /downloads/youtube
-      #XVIDEOS_DOWNLOAD_PATH: /downloads/xvideos
-      #PORNHUB_DOWNLOAD_PATH: /downloads/pornhub
-      #BILIBILI_DOWNLOAD_PATH= /downloads/bilibili
+      TZ: Asia/Shanghai
+    ports:
+      - 8530:8530
     volumes:
-      - /vol1/1000/media/downloads/:/downloads/ #默认配置这个自动分类，如果配置了CUSTOM_DOWNLOAD_PATH：true,注释这行，使用以下单独分类目录
-      - /vol1/1000/docker/SaveXTube/x_cookies.txt:/app/x/x_cookies.txt
-     # - /vol1/1000/docker/SaveXTube/b_cookies.txt:/app/b/b_cookies.txt
-     # - /vol1/1000/media/downloads/x:/downloads/x #CUSTOM_DOWNLOAD_PATH设置false 的话，要为 x配置单独目录
-     # - /vol1/1000/media/downloads/youtube:/downloads/youtube #CUSTOM_DOWNLOAD_PATH设置true的话，要为 youtube 配置单独目录
-     # - /vol1/1000/media/downloads/xvideos:/downloads/xvideos #CUSTOM_DOWNLOAD_PATH设置true 的话，要为 xvideos 配置单独目录
-     # - /vol1/1000/media/downloads/pornhub:/downloads/pornhub #CUSTOM_DOWNLOAD_PATH设置true 的话，要为 pornhub 配置单独目录
-     # - /vol1/1000/media/downloads/pornhub:/downloads/bilibili #CUSTOM_DOWNLOAD_PATH设置true 的话，要为bilibili配置单独目
+      # 下载目录
+      - /vol1/1000/media/downloads/:/downloads/
+      
+      # Cookies 目录（只读挂载）
+      - /vol1/1000/docker/SaveXTube/cookies/:/app/cookies:ro
+      
+      # 配置文件目录
+      - /vol1/1000/docker/SaveXTube/config:/app/config
+      
+      # 数据库目录
+      - /vol1/1000/docker/SaveXTube/db/:/app/db
+      
+      # 日志目录
+      - /vol1/1000/docker/SaveXTube/logs:/app/logs
 ```
 
-### 配置说明
+### 🔧 自定义文件目录映射
 
-| 环境变量 | 说明 | 是否必填 | 默认值 |
-|---------|------|---------|--------|
-| `TELEGRAM_BOT_TOKEN` | Telegram 机器人 Token | ✅ 必填 | - |
-| `CONVERT_TO_MP4` | 是否自动转换 webm 为 mp4 | ❌ 可选 | `true` |
-| `X_COOKIES` | X 平台 cookies 文件路径 | ❌ 可选 | - |
-| `B_COOKIES` | B 站 cookies 文件路径 | ❌ 可选 | - |
-| `DOWNLOAD_PATH` | 容器内下载路径 | ❌ 可选 | `/downloads` |
-| `PROXY_HOST` | 启用代理 | ❌ 可选 | - |
-| `CUSTOM_DOWNLOAD_PATH` | 启用自定义目录 | ❌ 可选 | - |
+```yaml
+volumes:
+  # 统一下载目录
+  - /vol1/1000/media/downloads/:/downloads/
+  
+  # 或者分别映射不同平台到不同目录
+  - /vol1/1000/media/videos/youtube:/downloads/YouTube
+  - /vol1/1000/media/videos/bilibili:/downloads/Bilibili
+  - /vol1/1000/media/music/netease:/downloads/Music/NetEaseCloudMusic
+  - /vol1/1000/media/music/qqmusic:/downloads/Music/QQMusic
+  - /vol1/1000/media/music/applemusic:/downloads/Music/AppleMusic
+ 
+```
 
+**注意**: 所有路径都可以通过环境变量进行自定义配置。
+
+## 📁 自定义下载路径配置
+
+### 📋 支持的平台和下载路径
+
+| 平台 | 默认下载路径 | 分类 | 说明 |
+|------|-------------|----------|------|
+| **YouTube** | `/downloads/YouTube/` | 🎬视频 | YouTube视频和音频 |
+| **B站 (Bilibili)** | `/downloads/Bilibili/` | 🎬视频 | B站视频，包含收藏夹订阅 |
+| **X (Twitter)** | `/downloads/X/Pic` | 📷图片 | X平台图片 |
+| **X (Twitter)** | `/downloads/X/` | 🎬视频 | X平台视频和图片 |
+| **抖音 (Douyin)** | `/downloads/Douyin/` | 🎬视频 | 抖音短视频 |
+| **快手 (Kuaishou)** | `/downloads/Kuaishou/` | 🎬视频 | 快手短视频 |
+| **Instagram** | `/downloads/Instagram/Pic` | 📷图片 | Instagram图片 |
+| **Instagram** | `/downloads/Instagram/` | 🎬视频 | Instagram图片和视频 |
+| **Facebook** | `/downloads/Facebook/` | 🎬视频 | Facebook视频 |
+| **P站 (Pornhub)** | `/downloads/Pornhub/` | 🎬视频 | P站视频 |
+| **Xvideos** | `/downloads/Xvideos/` | 🎬视频 | Xvideos视频 |
+| **Telegram** | `/downloads/Telegram/` | 📷图片 | Telegram文件 |
+| **Telegraph** | `/downloads/Telegraph/` | 📷图片 | Telegraph图片 |
+| **网易云音乐** | `/downloads/NetEaseCloudMusic/` | 🎵音乐 | 网易云音乐文件 |
+| **QQ音乐** | `/downloads/QQMusic/` | 🎵音乐 | QQ音乐文件 |
+| **Apple Music** | `/downloads/AppleMusic/` | 🎵音乐 | Apple Music文件 |
+| **YouTube Music** | `/downloads/YouTubeMusic/` | 🎵音乐 | YouTube Music文件 |
+
+## 📋 配置文件 (savextube.toml)
+
+按照以下格式填写内容并保存为`savextube.toml`存放在config目录：
+
+```toml
+# SaveXTube 完整配置文件
+# 创建文件时，若需要保留中文注释，请务必确保本文件编码为 UTF-8，否则会无法读取。
+
+[telegram]
+# Telegram Bot 配置
+telegram_bot_token = "YOUR_BOT_TOKEN" # 核心配置，必选项
+telegram_bot_api_id = "YOUR_API_ID" # 只有需要使用 telegram 保存视频才需要配置
+telegram_bot_api_hash = "YOUR_API_HASH" # 只有需要使用 telegram 保存视频才需要配置
+telegram_bot_allowed_user_ids = "YOUR_USER_ID" # 允许操作telegram机器人的用户ID
+
+[proxy]
+# 代理服务器配置（可选）
+# proxy_host = "http://192.168.2.1:7890"
+
+[netease]
+# 网易云音乐配置
+ncm_quality_level = "无损"
+ncm_download_lyrics = true
+ncm_dir_format = "{ArtistName}/{AlbumName}"
+ncm_album_folder_format = "{AlbumName}({ReleaseDate})"
+ncm_song_file_format = "{SongName}"
+
+[apple_music]
+# Apple Music 配置
+amdp = true
+amd_wrapper_decrypt = "192.168.2.134:10020"
+amd_wrapper_get = "192.168.2.134:20020"
+amd_region = "cn"
+
+[bilibili]
+# Bilibili 配置
+bilibili_poll_interval = 60
+
+[qbittorrent]
+# qBittorrent 连接配置
+qb_host = "192.168.2.134"
+qb_port = 8988
+qb_username = "admin"
+qb_password = "YOUR_PASSWORD"
+
+[logging]
+# 日志配置
+log_level = "INFO"
+log_dir = "/app/logs"
+log_max_size = 10
+log_backup_count = 5
+log_to_console = true
+log_to_file = true
+
+[youtube]
+# YouTube 配置
+youtube_convert_to_mp4 = true
+```
 
 ## 📖 使用方法
 
 ### 基本使用
-1. 启动 SaveXTube 容器
-2. 在 Telegram 中找到您创建的机器人
-3. 向机器人发送视频链接
-4. 机器人自动开始下载并显示进度
-5. 下载完成后，文件保存到指定目录
+1. 启动SaveXTube容器
+2. 在Telegram中找到您的机器人
+3. 发送链接或转发视频开始下载
 
-### 支持的链接格式
-- **YouTube**: `https://www.youtube.com/watch?v=...`
-- **X (Twitter)**: `https://x.com/.../status/...`
-- **B站**: `https://www.bilibili.com/video/BV... 或 https://b23.tv/...`
-- **P站 (Pornhub)**: `https://www.pornhub.com/view_video.php?viewkey=...`
-- **Xvideos**: `https://www.xvideos.com/video...`
-- **其他平台**: 持续更新中...
+### 支持的命令
+- `/start` - 开始使用机器人
+- `/help` - 显示帮助信息
+- `/status` - 查看系统状态
+- `/version ` - 查看版本
+- `/favsub ` - 订阅B站收藏夹
+- `/setting`  - 功能设置
+- `/cleanup ` - 清理文件
+- `/cancel ` - 取消下载
+- `/reboot ` - 重启容器
 
-### 文件存储结构
-```
-/downloads/
-├── youtube/          # YouTube 视频
-│   ├── video1.mp4
-│   └── video2.mp4
-└── x/               # X 平台视频
-    ├── tweet1.mp4
-    └── tweet2.mp4
-```
+### 支持的磁力链接格式
+
+- **磁力链接**: `magnet:?xt=urn:btih:...`
+- **种子文件**: 直接发送`.torrent`文件
 
 ## 🔧 故障排除
 
 ### 常见问题
 
 **Q: 机器人无响应？**
-- 检查 `TELEGRAM_BOT_TOKEN` 是否正确配置
+- 检查`telegram_bot_token`是否正确配置
 - 确认容器是否正常运行：`docker logs savextube`
 
-**Q: 无法下载 X 平台 NSFW 内容？**
-- 确认已正确配置 `x_cookies.txt` 文件
-- 检查 cookies 文件的映射路径是否正确
-- 确保 cookies 未过期，必要时重新导出
+**Q: 无法下载VIP内容？**
+- 确认已正确配置相应的cookies文件
+- 检查cookies文件是否过期，必要时重新导出
+- 验证cookies文件格式是否正确
+
+**Q: 磁力链接无法下载？**
+- 确认qBittorrent服务正在运行
+- 检查qBittorrent配置是否正确
+- 验证网络连接和防火墙设置
 
 **Q: 下载的文件找不到？**
 - 检查卷映射路径是否正确
 - 确认宿主机目录具有适当的读写权限
 
+**Q: 配置文件无法读取？**
+- 确认文件编码为UTF-8
+- 检查TOML语法是否正确
+- 验证文件路径是否正确
+
 ## 📝 更新日志
+
+### v0.5 (最新)
+- ✅ 简化Docker配置文件
+- ✅ 支持TOML配置文件
+- ✅ 切换配置文件到SQLite数据库
+- ✅ 新增YouTube Music下载支持
+- ✅ 新增头条视频下载支持
+- ✅ 完善cookies配置系统
+
+### v0.4
+- ✅ 新增qBittorrent磁力链接下载支持
+- ✅ 新增加Telegraph图片下载功能
+- ✅ 新增加Telegram视频转发下载功能
+- ✅ 支持/setup生成tg会话文件
+- ✅ 新增加X图片下载功能
+- ✅ 新增加小红书图片下载功能
+- ✅ 新增加Ins视频及图片下载功能
+- ✅ 新增加Facebook视频下载功能
+- ✅ 新增加快手视频下载功能
+- ✅ 新增加抖音视频下载功能
+- ✅ 新增加TikTok视频下载功能
+- ✅ 新增加微博视频下载功能
+- ✅ 新增B站收藏夹订阅、B站播放列表、UP主所有视频下载功能
+- ✅ 新增Youtube播放列表、博主所有视频下载功能
+- ✅ 新增Apple Music下载支持
+- ✅ 新增网易云音乐高质量下载
+- ✅ 优化下载进度显示
+- ✅ 增强错误处理和日志记录
+
+### v0.3
+- ✅ 支持Apple Music下载
+- ✅ 新增Instagram和Facebook支持
+- ✅ 优化YouTube 4K下载
+- ✅ 增强代理功能
+
+### v0.2
+- ✅ 支持下载YouTube最高分辨率视频
+- ✅ 下载完成后信息汇总支持显示分辨率
+- ✅ 支持代理功能
 
 ### v0.1
 - 🎉 首次发布
-- ✅ 支持 Telegram 机器人集成
-- ✅ 支持 YouTube 和 X 平台视频下载
+- ✅ 支持Telegram机器人集成
+- ✅ 支持YouTube和X平台视频下载
 - ✅ 实现实时进度显示
 - ✅ 添加格式自动转换功能
-- ✅ 支持 NSFW 内容下载
-### v0.2
-- ✅ 支持下载 YouTube 最高分辨率视频
-- ✅ 下载完成后信息汇总支持显示分辨率
-- ✅ 支持代理功能
+- ✅ 支持NSFW内容下载
+
 ## 🤝 贡献
 
-欢迎提交 Issue 和 Pull Request 来帮助改进 SaveXTube！
+欢迎提交Issue和Pull Request来帮助改进SaveXTube！
 
-## 📄 许可证
+### ☕ 请作者喝杯咖啡
 
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
+<img src="wechat_pay_qr.jpg" alt="微信支付收款码" width="300">
+
+如果这个项目对您有帮助，欢迎请作者喝杯咖啡 ☕
+
+## 💬 交流与支持
+
+### 🔗 社区交流
+
+- **Telegram群组**: (https://t.me/savextube)
+
+⭐ **如果这个项目对您有帮助，请给个Star支持一下！** ⭐
+
+---
+
+**注意**: 请遵守各平台的使用条款和版权法律，仅下载您有权访问的内容。
