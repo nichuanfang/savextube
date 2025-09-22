@@ -113,6 +113,18 @@ SaveXTube 是一个基于 Telegram 的智能多媒体下载工具，支持视频
 | **QQ音乐**         | `qqmusic_cookies.txt`    | `/app/cookies/qqmusic_cookies.txt`     | 用于下载QQ音乐VIP内容和高质量音乐     |
 | **Telegram**       | `telethon_session.txt`   | `/app/cookies/telethon_session.txt`    | 用于下载TG频道上的视频以及音频        |
 
+## 🔑 Telegram 会话文件
+
+⚠️ **注意**：  
+Telegram 会话文件不是直接手动创建的，而是通过以下地址生成：  
+
+👉 [http://x.x.x.x:8530/setup](http://x.x.x.x:8530/setup)  
+
+📱 使用步骤：  
+1. 打开上面的链接  
+2. 登录 Telegram 账号  
+3. 自动生成并下载会话文件  
+
 ## 🤖 创建 Telegram 机器人
 
 1. 在Telegram中搜索**@BotFather**
