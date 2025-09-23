@@ -243,7 +243,7 @@ volumes:
 | **Instagram**       | `/downloads/Instagram/Pic`       | 📷图片       | Instagram图片           |
 | **Instagram**       | `/downloads/Instagram/`          | 🎬视频       | Instagram图片和视频     |
 | **Facebook**        | `/downloads/Facebook/`           | 🎬视频       | Facebook视频            |
-| **小红书 **         | `/downloads/Xiaohongshu/`        | 🎬视频,📷图片 | 小红书视频及图片        |
+| **小红书**         | `/downloads/Xiaohongshu/`        | 🎬视频,📷图片 | 小红书视频及图片        |
 | **P站 (Pornhub)**   | `/downloads/Pornhub/`            | 🎬视频       | P站视频                 |
 | **Xvideos**         | `/downloads/Xvideos/`            | 🎬视频       | Xvideos视频             |
 | **Telegram**        | `/downloads/Telegram/`           | 📷图片       | Telegram文件            |
