@@ -5,6 +5,7 @@ SaveXTube 是一个基于 Telegram 的智能多媒体下载工具，支持视频
 ## 🚀 核心功能
 
 ### 📱 Telegram 机器人集成
+
 - **简单易用**：用户只需发送链接即可开始下载
 - **多平台支持**：支持主流视频、音乐、社交平台
 - **智能识别**：自动识别链接类型并选择最佳下载方式
@@ -12,30 +13,35 @@ SaveXTube 是一个基于 Telegram 的智能多媒体下载工具，支持视频
 - **详细反馈**：提供详细的下载信息和进度显示
 
 ### 📊 实时进度显示
+
 - **文件信息**：显示标题、大小、格式等详细信息
 - **下载进度**：实时更新的进度条和百分比
 - **传输状态**：显示下载速度和剩余时间
 - **质量信息**：显示视频分辨率和音频质量
 
 ### 🐳 Docker 容器化部署
+
 - **完整容器化**：一键部署，无需复杂配置
 - **灵活配置**：支持TOML配置文件和环境变量
 - **热重启**：配置更新无需停机
 - **资源优化**：针对NAS环境优化资源使用
 
 ### 📂 智能分类存储
+
 - **自动分类**：根据内容来源自动分类存储
 - **路径自定义**：支持自定义下载目录结构
 - **格式识别**：自动识别并分类不同格式文件
 - **灵活配置**：支持TOML配置文件和环境变量自定义路径
 
 ### 🎵 音乐下载支持
+
 - **网易云音乐**：支持高质量音乐下载，包含歌词和封面
 - **QQ音乐**：支持高品质音乐下载
 - **Apple Music**：支持无损音乐下载
 - **YouTube Music**：支持音频模式下载
 
 ### 🎬 视频下载支持
+
 - **YouTube**：支持最高4K分辨率，自动选择最佳质量，支持播放列表、频道视频下载
 - **B站 (Bilibili)**：支持大会员内容，包含弹幕下载，支持播放列表、频道视频下载
 - **X (Twitter)**：支持NSFW内容，通过Cookies认证
@@ -45,23 +51,27 @@ SaveXTube 是一个基于 Telegram 的智能多媒体下载工具，支持视频
 - **Telegram**：支持Telegram频道内容
 
 ### 🖼️ 图片下载支持
+
 - **X (Twitter)**：支持单张及多张图片下载
 - **小红书**：支持无水印图片下载
 - **Telegraph**：支持Telegraph图片下载
 
 ### 🔗 磁力链接与种子下载
+
 - **qBittorrent集成**：支持磁力链接和种子文件下载
 - **自动添加**：发送磁力链接自动添加到qBittorrent
 - **进度跟踪**：实时显示下载进度和状态
 - **智能分类**：自动为下载任务添加标签
 
 ### 📚 B站收藏夹订阅
+
 - **自动订阅**：订阅B站收藏夹，自动下载新视频
 - **定时检查**：可配置检查间隔，自动发现新内容
 - **批量下载**：支持收藏夹内所有视频批量下载
 - **智能管理**：支持订阅列表管理和手动下载
 
 ### 🔄 格式自动转换
+
 - **智能转换**：YouTube webm格式自动转换为mp4
 - **质量保证**：转换过程保持原内容质量
 - **可配置**：支持开启/关闭自动转换功能
@@ -73,21 +83,24 @@ SaveXTube 是一个基于 Telegram 的智能多媒体下载工具，支持视频
 **所有平台都使用相同的获取方法：**
 
 1. **安装浏览器扩展**
-   
+
    - 安装 "Get cookies.txt LOCALLY" 扩展
    - 支持 Chrome、Firefox、Edge 等主流浏览器
-   
+
 2. **登录目标平台**
+
    - 在浏览器中登录对应的平台账户
    - 确保账户有相应的会员权限（如需要）
 
 3. **导出Cookies**
+
    - 访问目标平台网站
    - 点击 "Get cookies.txt LOCALLY" 扩展图标
    - 选择 "Copy" 复制cookies内容
    - 保存为对应的文件名（见上表）
 
 4. **Cookies文件格式**
+
    ```
    # Netscape HTTP Cookie File
    # http://curl.haxx.se/rfc/cookie_spec.html
@@ -121,6 +134,7 @@ Telegram 会话文件不是直接手动创建的，而是通过以下地址生�
 👉 [http://x.x.x.x:8530/setup](http://x.x.x.x:8530/setup)  
 
 📱 使用步骤：  
+
 1. 打开上面的链接  
 2. 登录 Telegram 账号  
 3. 自动生成并下载会话文件  
@@ -130,11 +144,13 @@ Telegram 会话文件不是直接手动创建的，而是通过以下地址生�
 Apple Music 提供 **两种接入方式**：
 
 ### 1. ⭐ 默认方案（快速上手）
+
 - 仅需配置 **cookies**
 - 下载为 **标准音质**
 - 适合想快速使用的用户
 
 ### 2. 🚀 增强方案（需引入 Wrapper）
+
 - 先部署 **Wrapper** 服务  
 - 在配置文件中指定 **Wrapper 的两个地址**  
 - 支持 **更高音质**，并解锁更多功能  
@@ -143,14 +159,15 @@ Apple Music 提供 **两种接入方式**：
 
 ### 📊 对比表
 
-| 方案        | 配置方式                    | 下载音质  | 备注                       |
-|-------------|-----------------------------|-----------|----------------------------|
-| ⭐ 默认方案 | 配置 cookies                | 普通音质  | 简单快速，适合新手         |
-| 🚀 增强方案 | 部署 Wrapper + 配置地址     | 高音质    | 需要额外部署 Wrapper 服务  |
+| 方案       | 配置方式                | 下载音质 | 备注                      |
+| ---------- | ----------------------- | -------- | ------------------------- |
+| ⭐ 默认方案 | 配置 cookies            | 普通音质 | 简单快速，适合新手        |
+| 🚀 增强方案 | 部署 Wrapper + 配置地址 | 高音质   | 需要额外部署 Wrapper 服务 |
 
 ---
 
 ### 📌 提示
+
 - 如果只是日常试听，**默认方案**即可满足  
 - 如果追求 **高音质 / 完整功能**，推荐使用 **增强方案**
 
@@ -215,25 +232,26 @@ volumes:
 
 ### 📋 支持的平台和下载路径
 
-| 平台 | 默认下载路径 | 分类 | 说明 |
-|------|-------------|----------|------|
-| **YouTube** | `/downloads/YouTube/` | 🎬视频 | YouTube视频和音频 |
-| **B站 (Bilibili)** | `/downloads/Bilibili/` | 🎬视频 | B站视频，包含收藏夹订阅 |
-| **X (Twitter)** | `/downloads/X/Pic` | 📷图片 | X平台图片 |
-| **X (Twitter)** | `/downloads/X/` | 🎬视频 | X平台视频和图片 |
-| **抖音 (Douyin)** | `/downloads/Douyin/` | 🎬视频 | 抖音短视频 |
-| **快手 (Kuaishou)** | `/downloads/Kuaishou/` | 🎬视频 | 快手短视频 |
-| **Instagram** | `/downloads/Instagram/Pic` | 📷图片 | Instagram图片 |
-| **Instagram** | `/downloads/Instagram/` | 🎬视频 | Instagram图片和视频 |
-| **Facebook** | `/downloads/Facebook/` | 🎬视频 | Facebook视频 |
-| **P站 (Pornhub)** | `/downloads/Pornhub/` | 🎬视频 | P站视频 |
-| **Xvideos** | `/downloads/Xvideos/` | 🎬视频 | Xvideos视频 |
-| **Telegram** | `/downloads/Telegram/` | 📷图片 | Telegram文件 |
-| **Telegraph** | `/downloads/Telegraph/` | 📷图片 | Telegraph图片 |
-| **网易云音乐** | `/downloads/NetEaseCloudMusic/` | 🎵音乐 | 网易云音乐文件 |
-| **QQ音乐** | `/downloads/QQMusic/` | 🎵音乐 | QQ音乐文件 |
-| **Apple Music** | `/downloads/AppleMusic/` | 🎵音乐 | Apple Music文件 |
-| **YouTube Music** | `/downloads/YouTubeMusic/` | 🎵音乐 | YouTube Music文件 |
+| 平台                | 默认下载路径                    | 分类        | 说明                    |
+| ------------------- | ------------------------------- | ----------- | ----------------------- |
+| **YouTube**         | `/downloads/YouTube/`           | 🎬视频       | YouTube视频和音频       |
+| **B站 (Bilibili)**  | `/downloads/Bilibili/`          | 🎬视频       | B站视频，包含收藏夹订阅 |
+| **X (Twitter)**     | `/downloads/X/Pic`              | 📷图片       | X平台图片               |
+| **X (Twitter)**     | `/downloads/X/`                 | 🎬视频       | X平台视频和图片         |
+| **抖音 (Douyin)**   | `/downloads/Douyin/`            | 🎬视频       | 抖音短视频              |
+| **快手 (Kuaishou)** | `/downloads/Kuaishou/`          | 🎬视频       | 快手短视频              |
+| **Instagram**       | `/downloads/Instagram/Pic`      | 📷图片       | Instagram图片           |
+| **Instagram**       | `/downloads/Instagram/`         | 🎬视频       | Instagram图片和视频     |
+| **Facebook**        | `/downloads/Facebook/`          | 🎬视频       | Facebook视频            |
+| **小红书 **         | `/downloads/Xiaohongshu/`       | 🎬视频,📷图片 | 小红书视频及图片        |
+| **P站 (Pornhub)**   | `/downloads/Pornhub/`           | 🎬视频       | P站视频                 |
+| **Xvideos**         | `/downloads/Xvideos/`           | 🎬视频       | Xvideos视频             |
+| **Telegram**        | `/downloads/Telegram/`          | 📷图片       | Telegram文件            |
+| **Telegraph**       | `/downloads/Telegraph/`         | 📷图片       | Telegraph图片           |
+| **网易云音乐**      | `/downloads/NetEaseCloudMusic/` | 🎵音乐       | 网易云音乐文件          |
+| **QQ音乐**          | `/downloads/QQMusic/`           | 🎵音乐       | QQ音乐文件              |
+| **Apple Music**     | `/downloads/AppleMusic/`        | 🎵音乐       | Apple Music文件         |
+| **YouTube Music**   | `/downloads/YouTubeMusic/`      | 🎵音乐       | YouTube Music文件       |
 
 ## 📋 配置文件 (savextube.toml)
 
@@ -297,11 +315,13 @@ youtube_convert_to_mp4 = true
 ## 📖 使用方法
 
 ### 基本使用
+
 1. 启动SaveXTube容器
 2. 在Telegram中找到您的机器人
 3. 发送链接或转发视频开始下载
 
 ### 支持的命令
+
 - `/start` - 开始使用机器人
 - `/help` - 显示帮助信息
 - `/status` - 查看系统状态
@@ -322,24 +342,29 @@ youtube_convert_to_mp4 = true
 ### 常见问题
 
 **Q: 机器人无响应？**
+
 - 检查`telegram_bot_token`是否正确配置
 - 确认容器是否正常运行：`docker logs savextube`
 
 **Q: 无法下载VIP内容？**
+
 - 确认已正确配置相应的cookies文件
 - 检查cookies文件是否过期，必要时重新导出
 - 验证cookies文件格式是否正确
 
 **Q: 磁力链接无法下载？**
+
 - 确认qBittorrent服务正在运行
 - 检查qBittorrent配置是否正确
 - 验证网络连接和防火墙设置
 
 **Q: 下载的文件找不到？**
+
 - 检查卷映射路径是否正确
 - 确认宿主机目录具有适当的读写权限
 
 **Q: 配置文件无法读取？**
+
 - 确认文件编码为UTF-8
 - 检查TOML语法是否正确
 - 验证文件路径是否正确
@@ -347,6 +372,7 @@ youtube_convert_to_mp4 = true
 ## 📝 更新日志
 
 ### v0.5 (最新)
+
 - ✅ 简化Docker配置文件
 - ✅ 支持TOML配置文件
 - ✅ 切换配置文件到SQLite数据库
@@ -355,6 +381,7 @@ youtube_convert_to_mp4 = true
 - ✅ 完善cookies配置系统
 
 ### v0.4
+
 - ✅ 新增qBittorrent磁力链接下载支持
 - ✅ 新增加Telegraph图片下载功能
 - ✅ 新增加Telegram视频转发下载功能
@@ -375,17 +402,20 @@ youtube_convert_to_mp4 = true
 - ✅ 增强错误处理和日志记录
 
 ### v0.3
+
 - ✅ 支持Apple Music下载
 - ✅ 新增Instagram和Facebook支持
 - ✅ 优化YouTube 4K下载
 - ✅ 增强代理功能
 
 ### v0.2
+
 - ✅ 支持下载YouTube最高分辨率视频
 - ✅ 下载完成后信息汇总支持显示分辨率
 - ✅ 支持代理功能
 
 ### v0.1
+
 - 🎉 首次发布
 - ✅ 支持Telegram机器人集成
 - ✅ 支持YouTube和X平台视频下载
