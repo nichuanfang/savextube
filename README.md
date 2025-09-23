@@ -257,7 +257,7 @@ volumes:
 | **Xvideos**         | `/downloads/Xvideos/`            | 🎬视频       | Xvideos视频             |
 | **Telegram**        | `/downloads/Telegram/`           | 📷图片       | Telegram文件            |
 | **Telegraph**       | `/downloads/Pictures/telegraph/` | 📷图片       | Telegraph图片           |
-| **网易云音乐**      | `/downloads/NetEaseCloudMusic/`  | 🎵音乐       | 网易云音乐文件          |
+| **网易云音乐**      | `/downloads/NeteaseCloudMusic/`  | 🎵音乐       | 网易云音乐文件          |
 | **QQ音乐**          | `/downloads/QQMusic/`            | 🎵音乐       | QQ音乐文件              |
 | **Apple Music**     | `/downloads/AppleMusic/`         | 🎵音乐       | Apple Music文件         |
 | **YouTube Music**   | `/downloads/YouTubeMusic/`       | 🎵音乐       | YouTube Music文件       |
