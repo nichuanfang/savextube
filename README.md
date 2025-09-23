@@ -126,18 +126,27 @@ SaveXTube 是一个基于 Telegram 的智能多媒体下载工具，支持视频
 | **QQ音乐**         | `qqmusic_cookies.txt`    | `/app/cookies/qqmusic_cookies.txt`     | 用于下载QQ音乐VIP内容和高质量音乐     |
 | **Telegram**       | `telethon_session.txt`   | `/app/cookies/telethon_session.txt`    | 用于下载TG频道上的视频以及音频        |
 
-## 🔑 Telegram 会话文件
 
-⚠️ **注意**：  
-Telegram 会话文件不是直接手动创建的，而是通过以下地址生成：  
 
-👉 [http://x.x.x.x:8530/setup](http://x.x.x.x:8530/setup)  
+## **🔧 开启 Telegram 文件转存功能**
 
-📱 使用步骤：  
+📱 **操作步骤**
 
-1. 打开上面的链接  
-2. 登录 Telegram 账号  
-3. 自动生成并下载会话文件  
+1. 打开配置页面
+
+   👉 http://x.x.x.x:8530/setup
+
+2. 填写必需信息
+
+ - **API ID**
+ - **API Hash**
+ - **Telegram 手机号**（接收验证码登录）
+
+   ⚡ 成功后，系统会在指定目录自动生成 **会话文件**。
+
+3. 使用方式
+
+   - 将频道或群里的视频 **转发** 到 **savextube 机器人**，即可完成转存。
 
 ## 🎵 Apple Music 下载方案
 
@@ -243,7 +252,7 @@ volumes:
 | **Instagram**       | `/downloads/Instagram/Pic`       | 📷图片       | Instagram图片           |
 | **Instagram**       | `/downloads/Instagram/`          | 🎬视频       | Instagram图片和视频     |
 | **Facebook**        | `/downloads/Facebook/`           | 🎬视频       | Facebook视频            |
-| **小红书**         | `/downloads/Xiaohongshu/`        | 🎬视频,📷图片 | 小红书视频及图片        |
+| **小红书 **         | `/downloads/Xiaohongshu/`        | 🎬视频,📷图片 | 小红书视频及图片        |
 | **P站 (Pornhub)**   | `/downloads/Pornhub/`            | 🎬视频       | P站视频                 |
 | **Xvideos**         | `/downloads/Xvideos/`            | 🎬视频       | Xvideos视频             |
 | **Telegram**        | `/downloads/Telegram/`           | 📷图片       | Telegram文件            |
