@@ -232,26 +232,26 @@ volumes:
 
 ### 📋 支持的平台和下载路径
 
-| 平台                | 默认下载路径                    | 分类        | 说明                    |
-| ------------------- | ------------------------------- | ----------- | ----------------------- |
-| **YouTube**         | `/downloads/YouTube/`           | 🎬视频       | YouTube视频和音频       |
-| **B站 (Bilibili)**  | `/downloads/Bilibili/`          | 🎬视频       | B站视频，包含收藏夹订阅 |
-| **X (Twitter)**     | `/downloads/X/Pic`              | 📷图片       | X平台图片               |
-| **X (Twitter)**     | `/downloads/X/`                 | 🎬视频       | X平台视频和图片         |
-| **抖音 (Douyin)**   | `/downloads/Douyin/`            | 🎬视频       | 抖音短视频              |
-| **快手 (Kuaishou)** | `/downloads/Kuaishou/`          | 🎬视频       | 快手短视频              |
-| **Instagram**       | `/downloads/Instagram/Pic`      | 📷图片       | Instagram图片           |
-| **Instagram**       | `/downloads/Instagram/`         | 🎬视频       | Instagram图片和视频     |
-| **Facebook**        | `/downloads/Facebook/`          | 🎬视频       | Facebook视频            |
-| **小红书 **         | `/downloads/Xiaohongshu/`       | 🎬视频,📷图片 | 小红书视频及图片        |
-| **P站 (Pornhub)**   | `/downloads/Pornhub/`           | 🎬视频       | P站视频                 |
-| **Xvideos**         | `/downloads/Xvideos/`           | 🎬视频       | Xvideos视频             |
-| **Telegram**        | `/downloads/Telegram/`          | 📷图片       | Telegram文件            |
-| **Telegraph**       | `/downloads/Telegraph/`         | 📷图片       | Telegraph图片           |
-| **网易云音乐**      | `/downloads/NetEaseCloudMusic/` | 🎵音乐       | 网易云音乐文件          |
-| **QQ音乐**          | `/downloads/QQMusic/`           | 🎵音乐       | QQ音乐文件              |
-| **Apple Music**     | `/downloads/AppleMusic/`        | 🎵音乐       | Apple Music文件         |
-| **YouTube Music**   | `/downloads/YouTubeMusic/`      | 🎵音乐       | YouTube Music文件       |
+| 平台                | 默认下载路径                     | 分类        | 说明                    |
+| ------------------- | -------------------------------- | ----------- | ----------------------- |
+| **YouTube**         | `/downloads/YouTube/`            | 🎬视频       | YouTube视频和音频       |
+| **B站 (Bilibili)**  | `/downloads/Bilibili/`           | 🎬视频       | B站视频，包含收藏夹订阅 |
+| **X (Twitter)**     | `/downloads/Pictures/twitter/`   | 📷图片       | X平台图片               |
+| **X (Twitter)**     | `/downloads/X/`                  | 🎬视频       | X平台视频和图片         |
+| **抖音 (Douyin)**   | `/downloads/Douyin/`             | 🎬视频       | 抖音短视频              |
+| **快手 (Kuaishou)** | `/downloads/Kuaishou/`           | 🎬视频       | 快手短视频              |
+| **Instagram**       | `/downloads/Instagram/Pic`       | 📷图片       | Instagram图片           |
+| **Instagram**       | `/downloads/Instagram/`          | 🎬视频       | Instagram图片和视频     |
+| **Facebook**        | `/downloads/Facebook/`           | 🎬视频       | Facebook视频            |
+| **小红书 **         | `/downloads/Xiaohongshu/`        | 🎬视频,📷图片 | 小红书视频及图片        |
+| **P站 (Pornhub)**   | `/downloads/Pornhub/`            | 🎬视频       | P站视频                 |
+| **Xvideos**         | `/downloads/Xvideos/`            | 🎬视频       | Xvideos视频             |
+| **Telegram**        | `/downloads/Telegram/`           | 📷图片       | Telegram文件            |
+| **Telegraph**       | `/downloads/Pictures/telegraph/` | 📷图片       | Telegraph图片           |
+| **网易云音乐**      | `/downloads/NetEaseCloudMusic/`  | 🎵音乐       | 网易云音乐文件          |
+| **QQ音乐**          | `/downloads/QQMusic/`            | 🎵音乐       | QQ音乐文件              |
+| **Apple Music**     | `/downloads/AppleMusic/`         | 🎵音乐       | Apple Music文件         |
+| **YouTube Music**   | `/downloads/YouTubeMusic/`       | 🎵音乐       | YouTube Music文件       |
 
 ## 📋 配置文件 (savextube.toml)
 
