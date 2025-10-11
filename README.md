@@ -312,7 +312,7 @@ volumes:
   # 或者分别映射不同平台到不同目录
   - /vol1/1000/media/videos/youtube:/downloads/YouTube
   - /vol1/1000/media/videos/bilibili:/downloads/Bilibili
-  - /vol1/1000/media/music/netease:/downloads/Music/NetEaseCloudMusic
+  - /vol1/1000/media/music/netease:/downloads/Music/NeteaseCloudMusic
   - /vol1/1000/media/music/qqmusic:/downloads/Music/QQMusic
   - /vol1/1000/media/music/applemusic:/downloads/Music/AppleMusic
  
