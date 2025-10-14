@@ -1,32 +1,63 @@
 # -*- coding: utf-8 -*-
 # 在最开始就禁用SSL警告
+from flask import Flask, jsonify, request
+from telegram.error import NetworkError, TimedOut, RetryAfter
+import httpx
+from concurrent.futures import ThreadPoolExecutor
+import gc
+import signal
+import qbittorrentapi
+import yt_dlp
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+    CallbackContext,
+    CallbackQueryHandler,
+)
+from telegram.constants import ParseMode
+from telegram import (
+    Update,
+    Bot,
+    InputFile,
+    Audio,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
+from telethon.sessions import StringSession
+from telethon import TelegramClient, types
+import subprocess
+import json
+import mimetypes
+import uuid
+import re
+import urllib3
+import requests
+import threading
+import time
+from dataclasses import dataclass
+from enum import Enum
+from typing import Optional, Dict, Any
+from urllib.parse import urlparse
+from pathlib import Path
+import logging
+import asyncio
+import sys
+import logging.handlers
+import warnings
 import os
 # 设置环境变量禁用SSL警告
 os.environ['PYTHONWARNINGS'] = 'ignore:Unverified HTTPS request'
 os.environ['URLLIB3_DISABLE_WARNINGS'] = '1'
 
-import warnings
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 warnings.filterwarnings('ignore', message='.*certificate verification.*')
 warnings.filterwarnings('ignore', message='.*SSL.*')
 warnings.filterwarnings('ignore', category=UserWarning, module='urllib3')
 
-import logging.handlers
-import os
-import sys
-import asyncio
-import logging
-import logging
 logging.getLogger("telethon").setLevel(logging.WARNING)
-from pathlib import Path
-from urllib.parse import urlparse
-from typing import Optional, Dict, Any
-from enum import Enum
-from dataclasses import dataclass
-import time
-import threading
-import requests
-import urllib3
 # 立即禁用urllib3的SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -46,48 +77,14 @@ try:
 except AttributeError:
     pass  # 该警告类型不存在，忽略
 
-import re
-import uuid
-import mimetypes
-import json
-import subprocess
-from telethon import TelegramClient, types
-from telethon.sessions import StringSession
-from telegram import (
-    Update,
-    Bot,
-    InputFile,
-    Audio,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
 try:
     from .bilibili_favsub import BilibiliFavSubscriptionManager
 except ImportError:
     from bilibili_favsub import BilibiliFavSubscriptionManager
-from telegram.constants import ParseMode
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-    CallbackContext,
-    CallbackQueryHandler,
-)
-import yt_dlp
-import qbittorrentapi
-import signal
-import gc
-from concurrent.futures import ThreadPoolExecutor
 
 # 网络错误处理相关导入
-import httpx
-from telegram.error import NetworkError, TimedOut, RetryAfter
 
 # 健康检查功能已删除，但保留 Telegram 会话生成功能
-from flask import Flask, jsonify, request
-import threading
 
 # 配置读取器
 try:
@@ -158,6 +155,8 @@ except ImportError:
     CONFIG_READER_AVAILABLE = False
 
 # 适配器：为缺少 download_album_by_id 的旧版 NeteaseDownloader 提供兼容实现
+
+
 class _NeteaseDownloaderAdapter:
     def __init__(self, base):
         self._base = base
@@ -193,19 +192,20 @@ class _NeteaseDownloaderAdapter:
                 }
 
             album_title = songs[0].get('album', f'专辑_{album_id}')
-            
+
             # 使用neteasecloud_music.py中的配置
             dir_format = self._base.dir_format
             album_folder_format = self._base.album_folder_format
-            
+
             # 获取艺术家信息
             artist_name = songs[0].get('artist', '未知艺术家')
-            
+
             # 构建专辑文件夹名称（使用NCM_ALBUM_FOLDER_FORMAT）
             if '{AlbumName}' in album_folder_format:
                 # 替换专辑名称占位符
-                album_folder_name = album_folder_format.replace('{AlbumName}', album_title)
-                
+                album_folder_name = album_folder_format.replace(
+                    '{AlbumName}', album_title)
+
                 # 如果有发布日期占位符，尝试获取发布日期
                 if '{ReleaseDate}' in album_folder_name:
                     try:
@@ -215,27 +215,35 @@ class _NeteaseDownloaderAdapter:
                             # 转换时间戳为年份
                             import time
                             try:
-                                year = time.strftime('%Y', time.localtime(int(release_date) / 1000))
-                                album_folder_name = album_folder_name.replace('{ReleaseDate}', year)
+                                year = time.strftime(
+                                    '%Y', time.localtime(int(release_date) / 1000))
+                                album_folder_name = album_folder_name.replace(
+                                    '{ReleaseDate}', year)
                             except:
-                                album_folder_name = album_folder_name.replace('{ReleaseDate}', '')
+                                album_folder_name = album_folder_name.replace(
+                                    '{ReleaseDate}', '')
                         else:
-                            album_folder_name = album_folder_name.replace('{ReleaseDate}', '')
+                            album_folder_name = album_folder_name.replace(
+                                '{ReleaseDate}', '')
                     except:
-                        album_folder_name = album_folder_name.replace('{ReleaseDate}', '')
-                
+                        album_folder_name = album_folder_name.replace(
+                            '{ReleaseDate}', '')
+
                 # 清理文件名中的非法字符
-                safe_album_folder_name = self._base.clean_filename(album_folder_name)
+                safe_album_folder_name = self._base.clean_filename(
+                    album_folder_name)
             else:
                 # 如果没有占位符，直接使用专辑名称
                 safe_album_folder_name = self._base.clean_filename(album_title)
-            
+
             # 构建完整的目录路径（使用NCM_DIR_FORMAT）
             if '{ArtistName}' in dir_format and '{AlbumName}' in dir_format:
                 # 格式：{ArtistName}/{AlbumName} - 艺术家/专辑
                 safe_artist_name = self._base.clean_filename(artist_name)
-                album_dir = os.path.join(download_dir, safe_artist_name, safe_album_folder_name)
-                logger.info(f"🔍 使用艺术家/专辑目录结构: {safe_artist_name}/{safe_album_folder_name}")
+                album_dir = os.path.join(
+                    download_dir, safe_artist_name, safe_album_folder_name)
+                logger.info(
+                    f"🔍 使用艺术家/专辑目录结构: {safe_artist_name}/{safe_album_folder_name}")
             elif '{AlbumName}' in dir_format:
                 # 格式：{AlbumName} - 直接以专辑命名
                 album_dir = os.path.join(download_dir, safe_album_folder_name)
@@ -252,10 +260,11 @@ class _NeteaseDownloaderAdapter:
 
             # 使用neteasecloud_music.py中的配置
             song_file_format = self._base.song_file_format
-            
+
             for i, song in enumerate(songs, 1):
                 sid = str(song.get('id'))
-                res = self._base.download_song_by_id(sid, album_dir, quality, progress_callback)
+                res = self._base.download_song_by_id(
+                    sid, album_dir, quality, progress_callback)
                 if res and res.get('success'):
                     downloaded += 1
                     size_mb = res.get('size_mb', 0) or 0
@@ -264,45 +273,54 @@ class _NeteaseDownloaderAdapter:
                     except Exception:
                         size_bytes = 0
                     total_size += size_bytes
-                    
+
                     # 获取歌曲信息
-                    song_title = res.get('song_title', song.get('name', 'Unknown'))
-                    song_artist = res.get('song_artist', song.get('artist', 'Unknown'))
+                    song_title = res.get(
+                        'song_title', song.get('name', 'Unknown'))
+                    song_artist = res.get(
+                        'song_artist', song.get('artist', 'Unknown'))
                     original_filename = res.get('filename', '')
-                    
+
                     # 构建自定义文件名
                     if '{SongNumber}' in song_file_format or '{SongName}' in song_file_format or '{ArtistName}' in song_file_format:
                         # 替换占位符
                         custom_filename = song_file_format
-                        
+
                         # 替换歌曲编号
                         if '{SongNumber}' in custom_filename:
-                            custom_filename = custom_filename.replace('{SongNumber}', f"{i:02d}")
-                        
+                            custom_filename = custom_filename.replace(
+                                '{SongNumber}', f"{i:02d}")
+
                         # 替换歌曲名称
                         if '{SongName}' in custom_filename:
-                            custom_filename = custom_filename.replace('{SongName}', song_title)
-                        
+                            custom_filename = custom_filename.replace(
+                                '{SongName}', song_title)
+
                         # 替换艺术家名称
                         if '{ArtistName}' in custom_filename:
-                            custom_filename = custom_filename.replace('{ArtistName}', song_artist)
-                        
+                            custom_filename = custom_filename.replace(
+                                '{ArtistName}', song_artist)
+
                         # 添加文件扩展名
                         if original_filename and '.' in original_filename:
                             file_ext = original_filename.split('.')[-1]
                             custom_filename = f"{custom_filename}.{file_ext}"
-                        
+
                         # 清理文件名中的非法字符
-                        safe_custom_filename = self._base.clean_filename(custom_filename)
-                        
+                        safe_custom_filename = self._base.clean_filename(
+                            custom_filename)
+
                         # 重命名文件
                         try:
-                            original_filepath = os.path.join(album_dir, original_filename)
-                            new_filepath = os.path.join(album_dir, safe_custom_filename)
-                            
+                            original_filepath = os.path.join(
+                                album_dir, original_filename)
+                            new_filepath = os.path.join(
+                                album_dir, safe_custom_filename)
+
                             if os.path.exists(original_filepath) and original_filepath != new_filepath:
                                 os.rename(original_filepath, new_filepath)
-                                logger.info(f"✅ 重命名歌曲文件: {original_filename} -> {safe_custom_filename}")
+                                logger.info(
+                                    f"✅ 重命名歌曲文件: {original_filename} -> {safe_custom_filename}")
                                 final_filename = safe_custom_filename
                             else:
                                 final_filename = original_filename
@@ -311,7 +329,7 @@ class _NeteaseDownloaderAdapter:
                             final_filename = original_filename
                     else:
                         final_filename = original_filename
-                    
+
                     songs_info.append({
                         'name': f"{song_title} - {song_artist}",
                         'size': size_bytes,
@@ -347,6 +365,7 @@ class _NeteaseDownloaderAdapter:
                 'quality': quality
             }
 
+
 def extract_xiaohongshu_url(text):
     import re
     # 先尝试提取标准http/https链接
@@ -363,11 +382,14 @@ def extract_xiaohongshu_url(text):
             return f"https://{url}"
 
     # 匹配没有协议的小红书域名
-    domain_urls = re.findall(r'(xhslink\.com/[^\s]+|xiaohongshu\.com/[^\s]+)', text)
+    domain_urls = re.findall(
+        r'(xhslink\.com/[^\s]+|xiaohongshu\.com/[^\s]+)', text)
     for url in domain_urls:
         return f"https://{url}"
 
     return None
+
+
 # 抖音和小红书下载相关导入
 try:
     from playwright.async_api import async_playwright
@@ -389,7 +411,8 @@ try:
     _static_dir_abs = _os.path.join(_os.path.dirname(__file__), "web")
     from web.tg_setup import create_blueprint as _tg_create_bp
     app.register_blueprint(_tg_create_bp(static_dir=_static_dir_abs))
-    logging.getLogger(__name__).info("✅ /setup 已由主进程Flask托管（使用 web/tg_setup.py）")
+    logging.getLogger(__name__).info(
+        "✅ /setup 已由主进程Flask托管（使用 web/tg_setup.py）")
 except Exception as _e:
     logging.getLogger(__name__).warning(f"⚠️ 注册 /setup 失败: {_e}")
 
@@ -427,9 +450,12 @@ except ImportError as e:
     sys.exit(1)
 
 # 工具函数定义
+
+
 def _clean_filename_for_display_local(filename: str) -> str:
     try:
-        import re, os
+        import re
+        import os
         # 移除时间戳前缀(10位数字+下划线)
         if filename and re.match(r"^\d{10}_", filename):
             display_name = filename[11:]
@@ -445,14 +471,19 @@ def _clean_filename_for_display_local(filename: str) -> str:
         return filename if len(filename) <= 35 else filename[:32] + "..."
 
 # 顶层提供进度条工具，避免嵌套函数名解析问题
+
+
 def _create_progress_bar_local(percent: float, length: int = 20) -> str:
     filled_length = int(length * percent / 100)
     return "█" * filled_length + "░" * (length - filled_length)
 
 # 全局工具函数，供网易云音乐进度回调使用
+
+
 def _clean_filename_for_display(filename: str) -> str:
     try:
-        import re, os
+        import re
+        import os
         # 移除时间戳前缀(10位数字+下划线)
         if filename and re.match(r"^\d{10}_", filename):
             display_name = filename[11:]
@@ -467,26 +498,31 @@ def _clean_filename_for_display(filename: str) -> str:
         filename = filename or ""
         return filename if len(filename) <= 35 else filename[:32] + "..."
 
+
 def _create_progress_bar(percent: float, length: int = 20) -> str:
     filled_length = int(length * percent / 100)
     return "█" * filled_length + "░" * (length - filled_length)
+
 
 def _escape_markdown_v2(text: str) -> str:
     """独立的MarkdownV2转义函数，用于网易云进度消息"""
     if not text:
         return text
-    
+
     # 先转义反斜杠，避免重复转义
     escaped_text = text.replace("\\", "\\\\")
-    
+
     # 转义MarkdownV2特殊字符
-    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    special_chars = ['_', '*', '[', ']',
+                     '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
     for char in special_chars:
         escaped_text = escaped_text.replace(char, f"\\{char}")
-    
+
     return escaped_text
 
 # 配置增强的日志系统
+
+
 def setup_logging():
     """配置增强的日志系统，支持远程NAS目录"""
     # 从环境变量获取日志配置
@@ -549,11 +585,14 @@ def setup_logging():
     # 禁用urllib3的所有警告
     logging.getLogger("urllib3").disabled = True
 
+
 # 设置日志
 setup_logging()
 logger = logging.getLogger("savextube")
 
 # 统一的进度管理函数
+
+
 def create_unified_progress_hook(message_updater=None, progress_data=None):
     """
     创建统一的进度回调函数，适用于所有基于 yt-dlp 的下载
@@ -570,7 +609,8 @@ def create_unified_progress_hook(message_updater=None, progress_data=None):
             if d.get('status') == 'downloading':
                 # 安全地获取下载进度信息
                 downloaded = d.get('downloaded_bytes', 0) or 0
-                total = d.get('total_bytes') or d.get('total_bytes_estimate', 0) or 0
+                total = d.get('total_bytes') or d.get(
+                    'total_bytes_estimate', 0) or 0
 
                 # 确保数值有效
                 if downloaded is None:
@@ -614,14 +654,16 @@ def create_unified_progress_hook(message_updater=None, progress_data=None):
                     })
 
                 # 记录进度信息
-                logger.info(f"下载进度: {percent:.1f}% ({downloaded}/{total} bytes) - {speed_str} - 剩余: {eta_str}")
+                logger.info(
+                    f"下载进度: {percent:.1f}% ({downloaded}/{total} bytes) - {speed_str} - 剩余: {eta_str}")
 
                 # 如果有消息更新器，调用它
                 if message_updater:
                     try:
                         # 检查是否为协程对象（错误情况）
                         if asyncio.iscoroutine(message_updater):
-                            logger.error(f"❌ [progress_hook] message_updater 是协程对象，不是函数！")
+                            logger.error(
+                                f"❌ [progress_hook] message_updater 是协程对象，不是函数！")
                             return
 
                         # 检查是否为异步函数
@@ -673,16 +715,19 @@ def create_unified_progress_hook(message_updater=None, progress_data=None):
                 if message_updater:
                     try:
                         # 添加详细的调试日志
-                        logger.info(f"🔍 [progress_hook] finished状态 - message_updater 类型: {type(message_updater)}")
+                        logger.info(
+                            f"🔍 [progress_hook] finished状态 - message_updater 类型: {type(message_updater)}")
 
                         # 检查是否为协程对象（错误情况）
                         if asyncio.iscoroutine(message_updater):
-                            logger.error(f"❌ [progress_hook] finished状态 - message_updater 是协程对象，不是函数！")
+                            logger.error(
+                                f"❌ [progress_hook] finished状态 - message_updater 是协程对象，不是函数！")
                             return
 
                         # 检查是否为异步函数
                         if asyncio.iscoroutinefunction(message_updater):
-                            logger.info(f"🔍 [progress_hook] finished状态 - 检测到异步函数，使用 run_coroutine_threadsafe")
+                            logger.info(
+                                f"🔍 [progress_hook] finished状态 - 检测到异步函数，使用 run_coroutine_threadsafe")
                             # 异步函数，使用 run_coroutine_threadsafe
                             try:
                                 loop = asyncio.get_running_loop()
@@ -697,7 +742,8 @@ def create_unified_progress_hook(message_updater=None, progress_data=None):
                             asyncio.run_coroutine_threadsafe(
                                 message_updater(d), loop)
                         else:
-                            logger.info(f"🔍 [progress_hook] finished状态 - 检测到同步函数，直接调用")
+                            logger.info(
+                                f"🔍 [progress_hook] finished状态 - 检测到同步函数，直接调用")
                             # 同步函数，直接调用
                             message_updater(d)
                     except Exception as e:
@@ -713,6 +759,8 @@ def create_unified_progress_hook(message_updater=None, progress_data=None):
             # 不中断下载，只记录错误
 
     return progress_hook
+
+
 def create_bilibili_message_updater(status_message, context, progress_data):
     """
     专门为B站多P下载创建的消息更新器
@@ -727,13 +775,15 @@ def create_bilibili_message_updater(status_message, context, progress_data):
     # --- 进度回调 ---
     last_update_time = {"time": time.time()}
     last_progress_percent = {"value": 0}
-    progress_state = {"last_stage": None, "last_percent": 0, "finished_shown": False}
+    progress_state = {"last_stage": None,
+                      "last_percent": 0, "finished_shown": False}
     last_progress_text = {"text": ""}
 
     # 创建B站专用的消息更新器函数
     async def bilibili_message_updater(text_or_dict):
         try:
-            logger.info(f"🔍 bilibili_message_updater 被调用，参数类型: {type(text_or_dict)}")
+            logger.info(
+                f"🔍 bilibili_message_updater 被调用，参数类型: {type(text_or_dict)}")
             logger.info(f"🔍 bilibili_message_updater 参数内容: {text_or_dict}")
 
             # 如果已经显示完成状态，忽略所有后续调用
@@ -802,6 +852,7 @@ def create_bilibili_message_updater(status_message, context, progress_data):
 
     return bilibili_message_updater
 
+
 def single_video_progress_hook(message_updater=None, progress_data=None, status_message=None, context=None):
     """
     适用于所有单集下载的 yt-dlp 进度回调，下载过程中显示进度，下载完成后显示文件信息。
@@ -810,7 +861,7 @@ def single_video_progress_hook(message_updater=None, progress_data=None, status_
     import os  # 导入os模块以解决作用域问题
     import time
     import threading
-    
+
     # 定义工具函数，避免作用域问题
     def _clean_filename_for_display_local(filename: str) -> str:
         try:
@@ -845,13 +896,15 @@ def single_video_progress_hook(message_updater=None, progress_data=None, status_
     def progress_hook(d):
         # 显示进度日志
         logger.info(f"🔍 [PROGRESS_HOOK] 被调用: {d.get('status', 'unknown')}")
-        logger.info(f"🔍 [PROGRESS_DEBUG] status_message: {status_message is not None}, context: {context is not None}")
+        logger.info(
+            f"🔍 [PROGRESS_DEBUG] status_message: {status_message is not None}, context: {context is not None}")
         if isinstance(d, dict) and d.get('status') == 'downloading':
-            progress = (d.get('downloaded_bytes', 0) / (d.get('total_bytes', 1))) * 100
+            progress = (d.get('downloaded_bytes', 0) /
+                        (d.get('total_bytes', 1))) * 100
             logger.info(f"📊 下载进度: {progress:.1f}%")
         elif isinstance(d, dict) and d.get('status') == 'finished':
             logger.info("✅ 下载完成")
-        
+
         # 支持字符串类型，直接发到Telegram
         if isinstance(d, str):
             if message_updater and status_message:
@@ -882,7 +935,8 @@ def single_video_progress_hook(message_updater=None, progress_data=None, status_
         try:
             if d['status'] == 'downloading':
                 raw_filename = d.get('filename', '')
-                display_filename = os.path.basename(raw_filename) if raw_filename else 'video.mp4'
+                display_filename = os.path.basename(
+                    raw_filename) if raw_filename else 'video.mp4'
                 progress_data.update({
                     'filename': display_filename,
                     'total_bytes': d.get('total_bytes') or d.get('total_bytes_estimate', 0),
@@ -893,7 +947,8 @@ def single_video_progress_hook(message_updater=None, progress_data=None, status_
                 })
             elif d['status'] == 'finished':
                 final_filename = d.get('filename', '')
-                display_filename = os.path.basename(final_filename) if final_filename else 'video.mp4'
+                display_filename = os.path.basename(
+                    final_filename) if final_filename else 'video.mp4'
                 progress_data.update({
                     'filename': display_filename,
                     'status': 'finished',
@@ -905,10 +960,12 @@ def single_video_progress_hook(message_updater=None, progress_data=None, status_
             logger.error(f"更新 progress_data 错误: {str(e)}")
 
         # 如果没有status_message和context，使用简单的message_updater
-        logger.info(f"🔍 [PROGRESS_DEBUG] status_message: {status_message is not None}, context: {context is not None}")
+        logger.info(
+            f"🔍 [PROGRESS_DEBUG] status_message: {status_message is not None}, context: {context is not None}")
         if not status_message or not context:
             if message_updater:
-                logger.info(f"🔍 single_video_progress_hook 调用简单模式: status={d.get('status')}, async={asyncio.iscoroutinefunction(message_updater)}")
+                logger.info(
+                    f"🔍 single_video_progress_hook 调用简单模式: status={d.get('status')}, async={asyncio.iscoroutinefunction(message_updater)}")
 
                 if asyncio.iscoroutinefunction(message_updater):
                     # 异步函数，在独立线程中创建新的事件循环来运行
@@ -931,7 +988,8 @@ def single_video_progress_hook(message_updater=None, progress_data=None, status_
 
                         # 启动线程（不等待完成）
                         import threading
-                        thread = threading.Thread(target=run_async_in_thread, daemon=True)
+                        thread = threading.Thread(
+                            target=run_async_in_thread, daemon=True)
                         thread.start()
 
                     except Exception as e:
@@ -957,38 +1015,41 @@ def single_video_progress_hook(message_updater=None, progress_data=None, status_
             update_interval = 0.1  # 大文件0.1秒更新一次
 
         time_since_last = now - last_update_time['time']
-        
+
         # 计算当前进度
         current_progress = 0
         if total_bytes > 0:
-            current_progress = (d.get('downloaded_bytes', 0) / total_bytes) * 100
-        
+            current_progress = (
+                d.get('downloaded_bytes', 0) / total_bytes) * 100
+
         # 获取上次的进度
         if progress_data and isinstance(progress_data, dict):
             last_progress = progress_data.get('last_progress', 0)
         else:
             last_progress = 0
-        
+
         # 强制更新条件：
         # 1. 超过1秒没有更新
         # 2. 进度变化超过1%
         # 3. 下载完成
-        force_update = (time_since_last > 1.0 or 
-                       abs(current_progress - last_progress) >= 1.0 or
-                       d.get('status') == 'finished')
-        
+        force_update = (time_since_last > 1.0 or
+                        abs(current_progress - last_progress) >= 1.0 or
+                        d.get('status') == 'finished')
+
         if time_since_last < update_interval and not force_update:
-            logger.info(f"⏰ 跳过更新，距离上次更新仅 {time_since_last:.2f}秒，需要等待 {update_interval}秒")
+            logger.info(
+                f"⏰ 跳过更新，距离上次更新仅 {time_since_last:.2f}秒，需要等待 {update_interval}秒")
             return
-        
+
         if force_update:
             if time_since_last > 1.0:
                 logger.info(f"🔄 强制更新，距离上次更新已 {time_since_last:.2f}秒")
             elif abs(current_progress - last_progress) >= 1.0:
-                logger.info(f"🔄 强制更新，进度变化 {last_progress:.1f}% -> {current_progress:.1f}%")
+                logger.info(
+                    f"🔄 强制更新，进度变化 {last_progress:.1f}% -> {current_progress:.1f}%")
             elif d.get('status') == 'finished':
                 logger.info(f"🔄 强制更新，下载完成")
-        
+
         # 更新进度记录
         if progress_data and isinstance(progress_data, dict):
             progress_data['last_progress'] = current_progress
@@ -1017,7 +1078,8 @@ def single_video_progress_hook(message_updater=None, progress_data=None, status_
             # 显示完成信息
             display_filename = _clean_filename_for_display_local(filename)
             progress_bar = _create_progress_bar_local(100.0)
-            size_mb = total_bytes / (1024 * 1024) if total_bytes > 0 else downloaded_bytes / (1024 * 1024)
+            size_mb = total_bytes / \
+                (1024 * 1024) if total_bytes > 0 else downloaded_bytes / (1024 * 1024)
 
             completion_text = (
                 f"📝 文件：{display_filename}\n"
@@ -1049,18 +1111,22 @@ def single_video_progress_hook(message_updater=None, progress_data=None, status_
         # 处理下载中状态 - 这是关键部分，需要发送到Telegram
         if d.get('status') == 'downloading':
             logger.info(f"🔍 [DOWNLOADING_DEBUG] 进入下载中状态处理")
-            logger.info(f"🔍 [DOWNLOADING_DEBUG] status_message: {status_message is not None}, context: {context is not None}")
+            logger.info(
+                f"🔍 [DOWNLOADING_DEBUG] status_message: {status_message is not None}, context: {context is not None}")
             last_update_time['time'] = now
 
-            total_bytes = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+            total_bytes = d.get('total_bytes') or d.get(
+                'total_bytes_estimate', 0)
             downloaded_bytes = d.get('downloaded_bytes', 0)
             speed_bytes_s = d.get('speed', 0)
             eta_seconds = d.get('eta', 0)
             filename = d.get('filename', '') or "正在下载..."
-            logger.info(f"🔍 [DOWNLOADING_DEBUG] 文件信息: {filename}, 总大小: {total_bytes}, 已下载: {downloaded_bytes}")
+            logger.info(
+                f"🔍 [DOWNLOADING_DEBUG] 文件信息: {filename}, 总大小: {total_bytes}, 已下载: {downloaded_bytes}")
 
             # 计算进度
-            logger.info(f"🔍 [TOTAL_BYTES_DEBUG] total_bytes: {total_bytes}, 条件检查: {total_bytes > 0}")
+            logger.info(
+                f"🔍 [TOTAL_BYTES_DEBUG] total_bytes: {total_bytes}, 条件检查: {total_bytes > 0}")
             if total_bytes > 0:
                 progress = (downloaded_bytes / total_bytes) * 100
                 progress_bar = _create_progress_bar_local(progress)
@@ -1094,17 +1160,20 @@ def single_video_progress_hook(message_updater=None, progress_data=None, status_
                 async def do_update():
                     try:
                         logger.info(f"🔍 [DO_UPDATE_DEBUG] 开始更新Telegram消息")
-                        logger.info(f"🔍 [DO_UPDATE_DEBUG] status_message: {status_message is not None}")
-                        logger.info(f"🔍 [DO_UPDATE_DEBUG] progress_text: {progress_text[:100]}...")
+                        logger.info(
+                            f"🔍 [DO_UPDATE_DEBUG] status_message: {status_message is not None}")
+                        logger.info(
+                            f"🔍 [DO_UPDATE_DEBUG] progress_text: {progress_text[:100]}...")
                         await status_message.edit_text(progress_text, parse_mode=None)
-                        logger.info(f"📱 更新Telegram进度: {progress:.1f}% - 文件: {display_filename}")
+                        logger.info(
+                            f"📱 更新Telegram进度: {progress:.1f}% - 文件: {display_filename}")
                     except Exception as e:
                         logger.error(f"🔍 [DO_UPDATE_ERROR] 更新Telegram失败: {e}")
                         if "Message is not modified" not in str(e):
                             logger.warning(f"更新Telegram进度失败: {e}")
                         else:
                             logger.info(f"📱 Telegram消息未修改，跳过更新")
-                
+
                 logger.info(f"🔍 [DO_UPDATE_DEFINED] do_update 协程已定义")
 
                 try:
@@ -1116,17 +1185,22 @@ def single_video_progress_hook(message_updater=None, progress_data=None, status_
                         loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(loop)
 
-                logger.info(f"🔍 [ASYNC_DEBUG] 调用 asyncio.run_coroutine_threadsafe (下载中状态)")
+                logger.info(
+                    f"🔍 [ASYNC_DEBUG] 调用 asyncio.run_coroutine_threadsafe (下载中状态)")
                 logger.info(f"🔍 [ASYNC_DEBUG] loop: {loop is not None}")
                 logger.info(f"🔍 [ASYNC_DEBUG] do_update 函数: {do_update}")
-                
+
                 # 检查事件循环是否正在运行
                 try:
                     if loop.is_running():
-                        logger.info(f"🔍 [ASYNC_DEBUG] 事件循环正在运行，使用 run_coroutine_threadsafe")
-                        future = asyncio.run_coroutine_threadsafe(do_update(), loop)
-                        logger.info(f"🔍 [ASYNC_DEBUG] asyncio.run_coroutine_threadsafe 调用完成, future: {future}")
-                        logger.info(f"🔍 [ASYNC_DEBUG] future.done(): {future.done()}")
+                        logger.info(
+                            f"🔍 [ASYNC_DEBUG] 事件循环正在运行，使用 run_coroutine_threadsafe")
+                        future = asyncio.run_coroutine_threadsafe(
+                            do_update(), loop)
+                        logger.info(
+                            f"🔍 [ASYNC_DEBUG] asyncio.run_coroutine_threadsafe 调用完成, future: {future}")
+                        logger.info(
+                            f"🔍 [ASYNC_DEBUG] future.done(): {future.done()}")
                     else:
                         logger.info(f"🔍 [ASYNC_DEBUG] 事件循环未运行，直接运行协程")
                         # 如果事件循环没有运行，直接运行协程
@@ -1154,7 +1228,8 @@ def single_video_progress_hook(message_updater=None, progress_data=None, status_
                 async def do_update():
                     try:
                         await status_message.edit_text(progress_text, parse_mode=None)
-                        logger.info(f"📱 更新Telegram进度（无大小信息）- 文件: {display_filename}")
+                        logger.info(
+                            f"📱 更新Telegram进度（无大小信息）- 文件: {display_filename}")
                     except Exception as e:
                         if "Message is not modified" not in str(e):
                             logger.warning(f"更新Telegram进度失败: {e}")
@@ -1196,7 +1271,7 @@ def apple_music_progress_hook(message_updater=None, progress_data=None, status_m
         if isinstance(progress_info, dict):
             try:
                 phase = progress_info.get('phase', 'unknown')
-                
+
                 if phase == 'downloading':
                     # 下载阶段
                     percentage = progress_info.get('percentage', 0)
@@ -1204,7 +1279,7 @@ def apple_music_progress_hook(message_updater=None, progress_data=None, status_m
                     total = progress_info.get('total', 0)
                     unit = progress_info.get('unit', 'MB')
                     speed = progress_info.get('speed', '0 MB/s')
-                    
+
                     # 计算预计剩余时间
                     if speed and 'MB/s' in speed:
                         try:
@@ -1224,15 +1299,16 @@ def apple_music_progress_hook(message_updater=None, progress_data=None, status_m
                             remaining_time = "00:00"
                     else:
                         remaining_time = "00:00"
-                    
+
                     # 创建进度条
                     progress_bar_length = 20
                     filled_length = int(progress_bar_length * percentage / 100)
-                    progress_bar = "█" * filled_length + "░" * (progress_bar_length - filled_length)
-                    
+                    progress_bar = "█" * filled_length + "░" * \
+                        (progress_bar_length - filled_length)
+
                     # 获取文件名（如果可用）
                     filename = progress_info.get('filename', '未知文件')
-                    
+
                     # 判断是专辑还是单曲（通过检查文件名是否包含扩展名）
                     if '.' in filename and filename.endswith(('.flac', '.m4a', '.aac')):
                         # 单曲：显示文件信息
@@ -1249,15 +1325,16 @@ def apple_music_progress_hook(message_updater=None, progress_data=None, status_m
                         # 专辑：显示专辑信息和文件信息
                         # 专辑下载时，需要显示当前正在下载的单曲名称
                         album_name = filename
-                        current_track = progress_info.get('current_track', None)
-                        
+                        current_track = progress_info.get(
+                            'current_track', None)
+
                         if current_track:
                             # 如果有当前单曲名称，显示为 "专辑名 + 当前单曲 + .m4a格式"
                             file_display = f"📀 专辑: {album_name}\n📝 文件: {current_track}.m4a"
                         else:
                             # 如果没有当前单曲名称，显示专辑名
                             file_display = f"📀 专辑: {album_name}\n📝 文件: 正在获取单曲信息..."
-                        
+
                         progress_text = (
                             f"🍎 Apple Music 下载中\n\n"
                             f"{file_display}\n"
@@ -1266,7 +1343,7 @@ def apple_music_progress_hook(message_updater=None, progress_data=None, status_m
                             f"⏳ 预计剩余: {remaining_time}\n"
                             f"📊 进度: {progress_bar} {percentage}%"
                         )
-                    
+
                     # 发送进度信息到Telegram
                     if message_updater and status_message:
                         try:
@@ -1286,16 +1363,16 @@ def apple_music_progress_hook(message_updater=None, progress_data=None, status_m
 
                         asyncio.run_coroutine_threadsafe(do_update(), loop)
                     return
-                    
+
                 else:
                     # 其他阶段，简化处理，避免循环
                     logger.debug(f"🍎 Apple Music 阶段: {phase}")
                     return
-                
+
             except Exception as e:
                 logger.error(f"处理Apple Music进度信息时出错: {e}")
                 return
-        
+
         # 兼容旧的字符串类型，直接发到Telegram
         if isinstance(progress_info, str):
             text = progress_info
@@ -1320,8 +1397,10 @@ def apple_music_progress_hook(message_updater=None, progress_data=None, status_m
 
     return progress_hook
 
+
 # 全局变量，在函数外部定义，确保状态持久化
 _netease_last_update_time = {"time": 0}
+
 
 def netease_music_progress_hook(message_updater=None, progress_data=None, status_message=None, context=None):
     """
@@ -1330,7 +1409,7 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
     import os
     import time
     import threading
-    
+
     # 定义工具函数，避免作用域问题
     def _clean_filename_for_display_local(filename: str) -> str:
         try:
@@ -1350,12 +1429,10 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
             # 确保只返回文件名
             display_name = os.path.basename(filename)
             return display_name if len(display_name) <= 35 else display_name[:32] + "..."
-    
+
     def _create_progress_bar_local(percent: float, length: int = 20) -> str:
         filled_length = int(length * percent / 100)
         return "█" * filled_length + "░" * (length - filled_length)
-    
-
 
     # 初始化进度数据
     if progress_data is None:
@@ -1368,8 +1445,9 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
     def progress_hook(d):
         # 添加调试日志
         logger.info(f"🔍 [NETEASE_PROGRESS] 收到进度回调: {d}")
-        logger.info(f"🔍 [NETEASE_PROGRESS] status_message: {status_message is not None}, context: {context is not None}, message_updater: {message_updater is not None}")
-        
+        logger.info(
+            f"🔍 [NETEASE_PROGRESS] status_message: {status_message is not None}, context: {context is not None}, message_updater: {message_updater is not None}")
+
         # 支持字符串类型，直接发到Telegram
         if isinstance(d, str):
             if message_updater and status_message:
@@ -1393,14 +1471,16 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
 
         # 添加类型检查，确保d是字典类型
         if not isinstance(d, dict):
-            logger.warning(f"netease_progress_hook接收到非字典类型参数: {type(d)}, 内容: {d}")
+            logger.warning(
+                f"netease_progress_hook接收到非字典类型参数: {type(d)}, 内容: {d}")
             return
 
         # 更新 progress_data
         try:
             if d['status'] == 'downloading':
                 raw_filename = d.get('filename', '')
-                display_filename = os.path.basename(raw_filename) if raw_filename else 'music.mp3'
+                display_filename = os.path.basename(
+                    raw_filename) if raw_filename else 'music.mp3'
                 progress_data.update({
                     'filename': display_filename,
                     'total_bytes': d.get('total_bytes', 0),
@@ -1411,7 +1491,8 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
                 })
             elif d['status'] == 'finished':
                 final_filename = d.get('filename', '')
-                display_filename = os.path.basename(final_filename) if final_filename else 'music.mp3'
+                display_filename = os.path.basename(
+                    final_filename) if final_filename else 'music.mp3'
                 progress_data.update({
                     'filename': display_filename,
                     'status': 'finished',
@@ -1425,9 +1506,10 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
         # 如果没有status_message和context，使用简单的message_updater（但仍要执行完整的进度显示逻辑）
         simple_mode = not status_message or not context
         logger.info(f"🔍 [NETEASE_PROGRESS] simple_mode: {simple_mode}")
-        
+
         if simple_mode and message_updater:
-            logger.info(f"🔍 netease_progress_hook 简单模式: status={d.get('status')}")
+            logger.info(
+                f"🔍 netease_progress_hook 简单模式: status={d.get('status')}")
 
             # 简单模式（参考Apple Music实现，移除频率控制）
             # 为简单模式创建格式化的进度文本
@@ -1437,13 +1519,13 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
                     speed = d.get('speed', 0)
                     filename = d.get('filename', 'music.mp3')
                     total_bytes = d.get('total_bytes', 0)
-                    
+
                     if total_bytes > 0:
                         progress = (downloaded_bytes / total_bytes) * 100
                         speed_mb = speed / (1024 * 1024) if speed > 0 else 0
                         total_mb = total_bytes / (1024 * 1024)
                         downloaded_mb = downloaded_bytes / (1024 * 1024)
-                        
+
                         # 计算预计剩余时间
                         if speed > 0 and total_bytes > downloaded_bytes:
                             remaining = total_bytes - downloaded_bytes
@@ -1455,12 +1537,13 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
                                 eta_str = f"00:{secs:02d}"
                         else:
                             eta_str = "未知"
-                        
+
                         # 创建进度条（和单集下载一样的样式）
                         progress_bar = _create_progress_bar(progress)
-                        
+
                         # 使用和单集下载相同的格式
-                        display_filename = _clean_filename_for_display(filename)
+                        display_filename = _clean_filename_for_display(
+                            filename)
                         progress_text = (
                             f"📝 文件: `{display_filename}`\n"
                             f"💾 大小: `{downloaded_mb:.2f}MB / {total_mb:.2f}MB`\n"
@@ -1469,7 +1552,8 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
                             f"📊 进度: {progress_bar} `{progress:.1f}%`"
                         )
                     else:
-                        display_filename = _clean_filename_for_display(filename)
+                        display_filename = _clean_filename_for_display(
+                            filename)
                         progress_text = (
                             f"📝 文件: `{display_filename}`\n"
                             f"💾 大小: 未知\n"
@@ -1477,10 +1561,10 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
                             f"⏳ 预计剩余: 未知\n"
                             f"📊 进度: 下载中..."
                         )
-                        
+
                     # 使用普通文本
                     simple_message = progress_text
-                    
+
                     # 发送消息到Telegram
                     try:
                         loop = asyncio.get_running_loop()
@@ -1498,12 +1582,13 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
                             logger.warning(f"发送简单模式进度到TG失败: {e}")
 
                     asyncio.run_coroutine_threadsafe(do_update(), loop)
-                    
+
                 elif isinstance(d, dict) and d.get('status') == 'finished':
                     filename = d.get('filename', 'music.mp3')
                     total_bytes = d.get('total_bytes', 0)
-                    total_mb = total_bytes / (1024 * 1024) if total_bytes > 0 else 0
-                    
+                    total_mb = total_bytes / \
+                        (1024 * 1024) if total_bytes > 0 else 0
+
                     # 使用和单集下载相同的完成格式
                     display_filename = _clean_filename_for_display(filename)
                     progress_bar = _create_progress_bar(100.0)
@@ -1516,7 +1601,7 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
                     )
                     # 使用普通文本
                     simple_message = finish_text
-                    
+
                     # 发送消息到Telegram
                     try:
                         loop = asyncio.get_running_loop()
@@ -1534,16 +1619,17 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
                             logger.warning(f"发送简单模式完成消息到TG失败: {e}")
 
                     asyncio.run_coroutine_threadsafe(do_update(), loop)
-                
+
             except Exception as e:
                 logger.warning(f"网易云音乐简单模式回调失败: {e}")
         elif simple_mode:
             logger.warning("⚠️ 网易云音乐简单模式但无message_updater")
-        
+
         # 继续执行完整的进度显示逻辑（无论是否为简单模式）
 
         # 完整的进度显示逻辑（参考Apple Music实现，移除频率控制）
-        logger.info(f"🔍 [NETEASE_PROGRESS] 进入完整进度显示逻辑: status={d.get('status')}")
+        logger.info(
+            f"🔍 [NETEASE_PROGRESS] 进入完整进度显示逻辑: status={d.get('status')}")
 
         # 处理下载中状态
         if d.get('status') == 'downloading':
@@ -1590,16 +1676,19 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
                 async def do_update():
                     try:
                         await status_message.edit_text(progress_text)
-                        logger.info(f"📱 更新Telegram进度: {progress:.1f}% - 文件: {display_filename}")
+                        logger.info(
+                            f"📱 更新Telegram进度: {progress:.1f}% - 文件: {display_filename}")
                         # 更新成功后才更新时间戳
                         last_update_time['time'] = now
                     except Exception as e:
-                        logger.warning(f"🔍 [NETEASE_PROGRESS] 更新网易云音乐进度失败: {e}")
+                        logger.warning(
+                            f"🔍 [NETEASE_PROGRESS] 更新网易云音乐进度失败: {e}")
                         if "Message is not modified" not in str(e):
                             # 备用：如果status_message更新失败，尝试使用message_updater
                             if message_updater:
                                 try:
-                                    logger.info(f"🔍 [NETEASE_PROGRESS] 尝试使用备用message_updater")
+                                    logger.info(
+                                        f"🔍 [NETEASE_PROGRESS] 尝试使用备用message_updater")
                                     if asyncio.iscoroutinefunction(message_updater):
                                         await message_updater(progress_text)
                                     else:
@@ -1608,7 +1697,8 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
                                     # 备用方案成功也更新时间戳
                                     last_update_time['time'] = now
                                 except Exception as backup_e:
-                                    logger.warning(f"备用message_updater也失败: {backup_e}")
+                                    logger.warning(
+                                        f"备用message_updater也失败: {backup_e}")
 
                 try:
                     loop = asyncio.get_running_loop()
@@ -1622,14 +1712,16 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
                 if loop.is_running():
                     # 事件循环正在运行，使用 run_coroutine_threadsafe
                     try:
-                        future = asyncio.run_coroutine_threadsafe(do_update(), loop)
+                        future = asyncio.run_coroutine_threadsafe(
+                            do_update(), loop)
                         # 尝试获取结果，设置短超时
                         try:
                             result = future.result(timeout=0.1)
                         except asyncio.TimeoutError:
                             pass  # 超时是正常的，任务在后台执行
                         except Exception as e:
-                            logger.error(f"🔍 [NETEASE_PROGRESS] 进度更新任务执行失败: {e}")
+                            logger.error(
+                                f"🔍 [NETEASE_PROGRESS] 进度更新任务执行失败: {e}")
                     except Exception as e:
                         logger.error(f"🔍 [NETEASE_PROGRESS] 提交进度更新任务失败: {e}")
                 else:
@@ -1652,7 +1744,8 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
             # 显示完成信息
             display_filename = _clean_filename_for_display(filename)
             progress_bar = _create_progress_bar(100.0)
-            size_mb = total_bytes / (1024 * 1024) if total_bytes > 0 else downloaded_bytes / (1024 * 1024)
+            size_mb = total_bytes / \
+                (1024 * 1024) if total_bytes > 0 else downloaded_bytes / (1024 * 1024)
 
             completion_text = (
                 f"🎵 音乐：{display_filename}\n"
@@ -1681,7 +1774,8 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
                             # 备用方案成功也更新时间戳
                             last_update_time['time'] = now
                         except Exception as backup_e:
-                            logger.warning(f"备用message_updater显示完成信息也失败: {backup_e}")
+                            logger.warning(
+                                f"备用message_updater显示完成信息也失败: {backup_e}")
 
             try:
                 loop = asyncio.get_running_loop()
@@ -1695,7 +1789,8 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
             if loop.is_running():
                 # 事件循环正在运行，使用 run_coroutine_threadsafe
                 try:
-                    future = asyncio.run_coroutine_threadsafe(do_update(), loop)
+                    future = asyncio.run_coroutine_threadsafe(
+                        do_update(), loop)
                     # 尝试获取结果，设置短超时
                     try:
                         result = future.result(timeout=0.1)
@@ -1769,7 +1864,8 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
                                         message_updater(progress_text)
                                     logger.info("✅ 使用备用message_updater更新成功")
                                 except Exception as backup_e:
-                                    logger.warning(f"备用message_updater也失败: {backup_e}")
+                                    logger.warning(
+                                        f"备用message_updater也失败: {backup_e}")
 
                 try:
                     loop = asyncio.get_running_loop()
@@ -1799,7 +1895,8 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
             # 显示完成信息
             display_filename = _clean_filename_for_display_local(filename)
             progress_bar = _create_progress_bar_local(100.0)
-            size_mb = total_bytes / (1024 * 1024) if total_bytes > 0 else downloaded_bytes / (1024 * 1024)
+            size_mb = total_bytes / \
+                (1024 * 1024) if total_bytes > 0 else downloaded_bytes / (1024 * 1024)
 
             completion_text = (
                 f"🎵 音乐：{display_filename}\n"
@@ -1824,7 +1921,8 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
                                 message_updater(completion_text)
                             logger.info("✅ 使用备用message_updater显示完成信息成功")
                         except Exception as backup_e:
-                            logger.warning(f"备用message_updater显示完成信息也失败: {backup_e}")
+                            logger.warning(
+                                f"备用message_updater显示完成信息也失败: {backup_e}")
 
             try:
                 loop = asyncio.get_running_loop()
@@ -1894,7 +1992,8 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
                                         message_updater(progress_text)
                                     logger.info("✅ 使用备用message_updater更新成功")
                                 except Exception as backup_e:
-                                    logger.warning(f"备用message_updater也失败: {backup_e}")
+                                    logger.warning(
+                                        f"备用message_updater也失败: {backup_e}")
 
                 try:
                     loop = asyncio.get_running_loop()
@@ -1908,6 +2007,8 @@ def netease_music_progress_hook(message_updater=None, progress_data=None, status
                 asyncio.run_coroutine_threadsafe(do_update(), loop)
 
     return progress_hook
+
+
 class VideoDownloader:
     # 平台枚举定义
     class Platform(str, Enum):
@@ -1953,9 +2054,10 @@ class VideoDownloader:
         self.kuaishou_cookies_path = kuaishou_cookies_path
         self.facebook_cookies_path = facebook_cookies_path
         self.instagram_cookies_path = instagram_cookies_path
-        self.apple_music_cookies_path = os.environ.get("APPLEMUSIC_COOKIES") or os.environ.get("APPLEMUSIC_COOKIE_FILE") or "/app/cookies/apple_music_cookies.txt"
+        self.apple_music_cookies_path = os.environ.get("APPLEMUSIC_COOKIES") or os.environ.get(
+            "APPLEMUSIC_COOKIE_FILE") or "/app/cookies/apple_music_cookies.txt"
         self.proxy_host = os.environ.get("PROXY_HOST")
-        
+
         # 初始化 Instagram 下载器
         try:
             from Instagram_downloader import InstagramPicDownloaderSimple
@@ -1987,12 +2089,13 @@ class VideoDownloader:
                     use_amd = False
             else:
                 use_amd = amdp_env.lower() == "true"
-            
-            logger.info(f"🔧 Apple Music 下载器环境变量 AMDP: {os.environ.get('AMDP', '未设置')} -> 使用AMD: {use_amd}")
-            
+
+            logger.info(
+                f"🔧 Apple Music 下载器环境变量 AMDP: {os.environ.get('AMDP', '未设置')} -> 使用AMD: {use_amd}")
+
             # 导入 asyncio 模块
             import asyncio
-            
+
             # 检查当前事件循环状态
             try:
                 current_loop = asyncio.get_running_loop()
@@ -2001,28 +2104,28 @@ class VideoDownloader:
             except RuntimeError:
                 logger.info("✅ 没有运行中的事件循环")
                 has_running_loop = False
-            
+
             if use_amd:
                 # 使用新的 apple-music-downloader 后端
                 logger.info("🚀 尝试初始化 Apple Music Plus 下载器 (AMD)")
-                
+
                 # 在独立线程中初始化下载器，避免事件循环冲突
                 def init_apple_music_downloader():
                     """在独立线程中初始化Apple Music下载器"""
                     try:
                         from applemusic_downloader_plus import AppleMusicDownloaderPlus
-                        
+
                         # 检查输出目录
                         output_dir = str(self.apple_music_download_path)
                         if not os.path.exists(output_dir):
                             os.makedirs(output_dir, exist_ok=True)
-                        
+
                         # 确保AMD工具目录存在
                         amd_dir = "/app/amdp"
                         if not os.path.exists(amd_dir):
                             os.makedirs(amd_dir, exist_ok=True)
                             logger.info(f"✅ 创建AMD工具目录: {amd_dir}")
-                        
+
                         # 检查AMD工具是否可用
                         amd_tool_path = os.path.join(amd_dir, "amd")
                         if not os.path.exists(amd_tool_path):
@@ -2034,27 +2137,31 @@ class VideoDownloader:
                                 logger.info("✅ 修复AMD工具权限成功")
                             except Exception as e:
                                 logger.error(f"❌ 修复AMD工具权限失败: {e}")
-                        
+
                         downloader = AppleMusicDownloaderPlus(
                             output_dir=output_dir,
                             cookies_path=self.apple_music_cookies_path
                         )
-                        
+
                         # 检查下载器是否真正可用
                         if hasattr(downloader, 'is_available'):
                             is_available = downloader.is_available()
                             if not is_available:
-                                logger.error("❌ Apple Music Plus 下载器初始化失败：工具不可用")
+                                logger.error(
+                                    "❌ Apple Music Plus 下载器初始化失败：工具不可用")
                                 return None
-                        
+
                         # 额外检查：确保有可用的后端
                         if hasattr(downloader, 'backends'):
-                            available_backends = [b for b in downloader.backends if b.is_available()]
+                            available_backends = [
+                                b for b in downloader.backends if b.is_available()]
                             if not available_backends:
-                                logger.error("❌ Apple Music Plus 下载器初始化失败：没有可用的后端")
+                                logger.error(
+                                    "❌ Apple Music Plus 下载器初始化失败：没有可用的后端")
                                 return None
-                            logger.info(f"✅ Apple Music Plus 下载器后端检查通过: {[b.name for b in available_backends]}")
-                        
+                            logger.info(
+                                f"✅ Apple Music Plus 下载器后端检查通过: {[b.name for b in available_backends]}")
+
                         # 验证配置文件是否正确创建
                         config_path = os.path.join(amd_dir, "config.yaml")
                         if os.path.exists(config_path):
@@ -2069,15 +2176,15 @@ class VideoDownloader:
                                 logger.warning(f"⚠️ 无法读取AMD配置文件: {e}")
                         else:
                             logger.warning(f"⚠️ AMD配置文件不存在: {config_path}")
-                        
+
                         return downloader
-                        
+
                     except Exception as e:
                         logger.error(f"❌ Apple Music Plus 下载器初始化失败: {e}")
                         import traceback
                         logger.error(f"📋 错误堆栈: {traceback.format_exc()}")
                         return None
-                
+
                 # 如果有运行的事件循环，使用线程池初始化
                 if has_running_loop:
                     logger.info("🔄 在运行的事件循环中，使用线程池初始化下载器...")
@@ -2088,16 +2195,16 @@ class VideoDownloader:
                     # 没有运行的事件循环，直接初始化
                     logger.info("✅ 直接初始化下载器...")
                     self.apple_music_downloader = init_apple_music_downloader()
-                
+
                 if self.apple_music_downloader:
                     logger.info("✅ Apple Music Plus 下载器(AMD)初始化成功")
                 else:
                     logger.error("❌ Apple Music Plus 下载器初始化失败")
-                    
+
             else:
                 # 使用原有的 gamdl 后端
                 logger.info("🚀 尝试初始化 Apple Music 下载器 (GAMDL)")
-                
+
                 def init_gamdl_downloader():
                     """在独立线程中初始化GAMDL下载器"""
                     try:
@@ -2110,7 +2217,7 @@ class VideoDownloader:
                     except Exception as e:
                         logger.error(f"❌ GAMDL下载器初始化失败: {e}")
                         return None
-                
+
                 # 如果有运行的事件循环，使用线程池初始化
                 if has_running_loop:
                     logger.info("🔄 在运行的事件循环中，使用线程池初始化GAMDL下载器...")
@@ -2121,12 +2228,12 @@ class VideoDownloader:
                     # 没有运行的事件循环，直接初始化
                     logger.info("✅ 直接初始化GAMDL下载器...")
                     self.apple_music_downloader = init_gamdl_downloader()
-                
+
                 if self.apple_music_downloader:
                     logger.info("✅ Apple Music 下载器 (GAMDL) 初始化成功")
                 else:
                     logger.warning("⚠️ Apple Music 下载器初始化失败：gamdl 不可用")
-                    
+
         except ImportError as e:
             logger.error(f"❌ Apple Music 下载器导入失败: {e}")
             logger.error(f"🔍 详细错误信息: {type(e).__name__}: {str(e)}")
@@ -2228,7 +2335,8 @@ class VideoDownloader:
 
         # 如果设置了Instagram cookies，记录日志
         if self.instagram_cookies_path:
-            logger.info(f"🍪 使用Instagram cookies: {self.instagram_cookies_path}")
+            logger.info(
+                f"🍪 使用Instagram cookies: {self.instagram_cookies_path}")
 
         # 测试代理连接
         if self.proxy_host:
@@ -2263,7 +2371,8 @@ class VideoDownloader:
                 raise ImportError("neteasecloud_music 模块不可用")
             base_downloader = NeteaseDownloader(bot=self)
             # 使用适配器包装，兼容旧版本缺少的方法
-            self.netease_downloader = _NeteaseDownloaderAdapter(base_downloader)
+            self.netease_downloader = _NeteaseDownloaderAdapter(
+                base_downloader)
             logger.info(f"🎵 网易云音乐下载器初始化成功 (模块: {NETEASE_MODULE_PATH})")
         except Exception as e:
             logger.warning(f"网易云音乐下载器初始化失败: {e}")
@@ -2284,7 +2393,8 @@ class VideoDownloader:
             if YouTubeMusicDownloader is None:
                 raise ImportError("youtubemusic_downloader 模块不可用")
             self.youtubemusic_downloader = YouTubeMusicDownloader(bot=self)
-            logger.info(f"🎵 YouTube Music下载器初始化成功 (模块: {YOUTUBEMUSIC_MODULE_PATH})")
+            logger.info(
+                f"🎵 YouTube Music下载器初始化成功 (模块: {YOUTUBEMUSIC_MODULE_PATH})")
         except Exception as e:
             logger.warning(f"YouTube Music下载器初始化失败: {e}")
             self.youtubemusic_downloader = None
@@ -2313,7 +2423,8 @@ class VideoDownloader:
                         # 只处理 twitter.com 和 x.com 的 cookies
                         if domain in ['.twitter.com', '.x.com', 'twitter.com', 'x.com']:
                             cookies_dict[name] = value
-                            logger.debug(f"解析 X cookie: {name} = {value[:10]}...")
+                            logger.debug(
+                                f"解析 X cookie: {name} = {value[:10]}...")
 
             logger.info(f"成功解析 {len(cookies_dict)} 个 X cookies")
             return cookies_dict
@@ -2346,7 +2457,8 @@ class VideoDownloader:
                         # 只处理抖音相关的 cookies
                         if domain in ['.douyin.com', 'douyin.com', 'www.douyin.com', 'v.douyin.com', 'www.iesdouyin.com', 'iesdouyin.com']:
                             cookies_dict[name] = value
-                            logger.debug(f"解析抖音 cookie: {name} = {value[:10]}...")
+                            logger.debug(
+                                f"解析抖音 cookie: {name} = {value[:10]}...")
 
             logger.info(f"成功解析 {len(cookies_dict)} 个抖音 cookies")
             return cookies_dict
@@ -2377,7 +2489,8 @@ class VideoDownloader:
                             # 只处理快手相关的 cookies
                             if domain in ['.kuaishou.com', 'kuaishou.com', 'www.kuaishou.com', 'v.kuaishou.com']:
                                 cookies_dict[name] = value
-                                logger.debug(f"解析快手 cookie: {name} = {value[:10]}...")
+                                logger.debug(
+                                    f"解析快手 cookie: {name} = {value[:10]}...")
 
             logger.info(f"成功解析 {len(cookies_dict)} 个快手 cookies")
             return cookies_dict
@@ -2483,7 +2596,7 @@ class VideoDownloader:
                     "is_member": False,
                     "message": "未设置B站cookies，无法检测会员状态"
                 }
-            
+
             # 这里可以添加实际的B站API调用来检测会员状态
             # 目前返回默认状态
             return {
@@ -2506,15 +2619,15 @@ class VideoDownloader:
                 "no_warnings": True,
                 "listformats": True,
             }
-            
+
             # 添加B站cookies
             if self.b_cookies_path and os.path.exists(self.b_cookies_path):
                 ydl_opts["cookiefile"] = self.b_cookies_path
-                
+
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 formats = info.get("formats", [])
-                
+
                 video_formats = []
                 for fmt in formats:
                     if fmt.get("vcodec", "none") != "none":  # 视频格式
@@ -2528,20 +2641,21 @@ class VideoDownloader:
                             "filesize": fmt.get("filesize", 0),
                         }
                         video_formats.append(format_info)
-                
+
                 # 按分辨率排序
                 video_formats.sort(key=lambda x: x["height"], reverse=True)
-                
+
                 logger.info("🔍 B站可用视频格式:")
                 for fmt in video_formats:
-                    logger.info(f"  ID: {fmt['id']}, 分辨率: {fmt['width']}x{fmt['height']}, 码率: {fmt['tbr']}kbps, 格式: {fmt['ext']}, 说明: {fmt['format_note']}")
-                
+                    logger.info(
+                        f"  ID: {fmt['id']}, 分辨率: {fmt['width']}x{fmt['height']}, 码率: {fmt['tbr']}kbps, 格式: {fmt['ext']}, 说明: {fmt['format_note']}")
+
                 return {
                     "success": True,
                     "formats": video_formats,
                     "max_height": max([f["height"] for f in video_formats]) if video_formats else 0
                 }
-                
+
         except Exception as e:
             logger.error(f"调试B站格式失败: {e}")
             return {"success": False, "error": str(e)}
@@ -2662,10 +2776,10 @@ class VideoDownloader:
     def _clean_netease_url_special(self, text: str) -> str:
         """
         专门为网易云音乐清理URL，从包含中文描述的文本中提取纯净的网易云音乐链接
-        
+
         Args:
             text: 包含中文描述的文本，如"分享G.E.M.邓紫棋的专辑《T.I.M.E.》https://163cn.tv/jKbaG97 (@网易云音乐)"
-            
+
         Returns:
             str: 清理后的纯净URL，如果没找到则返回None
         """
@@ -2680,7 +2794,7 @@ class VideoDownloader:
                 r'https?://y\.music\.163\.com/[^\\s\u4e00-\u9fff]+',
                 r'https?://m\.music\.163\.com/[^\\s\u4e00-\u9fff]+',
             ]
-            
+
             for pattern in netease_patterns:
                 matches = re.findall(pattern, text)
                 if matches:
@@ -2688,21 +2802,23 @@ class VideoDownloader:
                     clean_url = matches[0]
                     # 清理URL末尾的标点符号
                     clean_url = clean_url.rstrip('.,;!?。，；！？')
-                    logger.info(f"🎵 网易云音乐URL清理成功: {text[:50]}... -> {clean_url}")
+                    logger.info(
+                        f"🎵 网易云音乐URL清理成功: {text[:50]}... -> {clean_url}")
                     return clean_url
-            
+
             # 如果没有找到，尝试从文本中提取任何看起来像URL的内容
             url_pattern = r'https?://[^\s\u4e00-\u9fff]+'
             matches = re.findall(url_pattern, text)
             for match in matches:
                 if '163cn.tv' in match or 'music.163.com' in match:
                     clean_url = match.rstrip('.,;!?。，；！？')
-                    logger.info(f"🎵 网易云音乐URL清理成功(备用): {text[:50]}... -> {clean_url}")
+                    logger.info(
+                        f"🎵 网易云音乐URL清理成功(备用): {text[:50]}... -> {clean_url}")
                     return clean_url
-            
+
             logger.warning(f"⚠️ 未在文本中找到网易云音乐链接: {text[:50]}...")
             return None
-            
+
         except Exception as e:
             logger.error(f"❌ 网易云音乐URL清理失败: {e}")
             return None
@@ -2735,7 +2851,7 @@ class VideoDownloader:
                         logger.warning(f"⚠️ 短链接展开失败，使用原URL")
                 except Exception as e:
                     logger.warning(f"⚠️ 短链接展开异常: {e}")
-            
+
             # 使用简单的启发式方法检测
             # 如果URL包含特定关键词，可能是图片
             if any(keyword in url.lower() for keyword in ['/explore/', '/discovery/item/']):
@@ -2748,23 +2864,23 @@ class VideoDownloader:
                         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
                         'Referer': 'https://www.xiaohongshu.com/'
                     }
-                    
+
                     response = await client.get(url, headers=headers, follow_redirects=True, timeout=10)
                     html_content = response.text.lower()
-                    
+
                     # 检查HTML内容中的关键词
                     if any(keyword in html_content for keyword in ['图片', 'image', 'photo', '壁纸', '头像']):
                         return "image"
                     elif any(keyword in html_content for keyword in ['视频', 'video', '播放']):
                         return "video"
-                    
+
                     # 默认返回图片类型，因为小红书大部分内容是图片
                     return "image"
             else:
                 # 对于其他URL（包括短链接），默认返回图片类型
                 logger.info(f"🔍 URL不包含特定关键词，默认返回图片类型: {url}")
                 return "image"
-                    
+
         except Exception as e:
             logger.warning(f"⚠️ 检测小红书内容类型失败: {e}")
             # 默认返回图片类型
@@ -2819,7 +2935,8 @@ class VideoDownloader:
                 expanded_url = None
                 try:
                     logger.info(f"🔄 使用移动端User-Agent请求...")
-                    response = requests.get(url, headers=mobile_headers, allow_redirects=True, timeout=10)
+                    response = requests.get(
+                        url, headers=mobile_headers, allow_redirects=True, timeout=10)
                     expanded_url = response.url
                     logger.info(f"🔄 移动端请求重定向到: {expanded_url}")
 
@@ -2828,7 +2945,8 @@ class VideoDownloader:
                         logger.info(f"✅ 移动端请求成功获取微博视频URL")
                         # 如果是h5.video.weibo.com，转换为标准的weibo.com格式
                         if "h5.video.weibo.com" in expanded_url:
-                            expanded_url = expanded_url.replace("h5.video.weibo.com", "weibo.com/tv")
+                            expanded_url = expanded_url.replace(
+                                "h5.video.weibo.com", "weibo.com/tv")
                             logger.info(f"🔄 转换为标准格式: {expanded_url}")
                     else:
                         logger.info(f"⚠️ 移动端请求未获取到标准微博视频URL，尝试桌面端...")
@@ -2839,7 +2957,8 @@ class VideoDownloader:
                     # 如果移动端请求失败，尝试桌面端请求
                     try:
                         logger.info(f"🔄 使用桌面端User-Agent请求...")
-                        response = requests.get(url, headers=desktop_headers, allow_redirects=True, timeout=10)
+                        response = requests.get(
+                            url, headers=desktop_headers, allow_redirects=True, timeout=10)
                         expanded_url = response.url
                         logger.info(f"🔄 桌面端请求重定向到: {expanded_url}")
                     except Exception as e2:
@@ -2859,7 +2978,8 @@ class VideoDownloader:
                                 encoded_url = match.group(1)
                                 # 多次URL解码，因为可能被多次编码
                                 real_url = urllib.parse.unquote(encoded_url)
-                                real_url = urllib.parse.unquote(real_url)  # 再次解码
+                                real_url = urllib.parse.unquote(
+                                    real_url)  # 再次解码
 
                                 # 清理URL参数，移除不必要的参数
                                 if '?' in real_url:
@@ -2873,7 +2993,8 @@ class VideoDownloader:
                                                 important_params.append(param)
 
                                     if important_params:
-                                        real_url = base_url + '?' + '&'.join(important_params)
+                                        real_url = base_url + '?' + \
+                                            '&'.join(important_params)
                                     else:
                                         real_url = base_url
 
@@ -2928,14 +3049,14 @@ class VideoDownloader:
             "m.music.163.com",
         ]:
             return True
-        
+
         # 检查短链接域名
         if parsed.netloc.lower() in [
             "163cn.tv",
             "music.163.cn",
         ]:
             return True
-        
+
         return False
 
     def is_qqmusic_url(self, url: str) -> bool:
@@ -2950,14 +3071,14 @@ class VideoDownloader:
             "i.y.qq.com",
         ]:
             return True
-        
+
         # 检查短链接域名
         if parsed.netloc.lower() in [
             "qq.cn",
             "qq.com",
         ]:
             return True
-        
+
         return False
 
     def is_apple_music_url(self, url: str) -> bool:
@@ -2975,7 +3096,7 @@ class VideoDownloader:
             "music.youtube.com",
         ]:
             return True
-        
+
         # 检查普通YouTube链接但包含播放列表标识（可能是YouTube Music播放列表）
         if parsed.netloc.lower() in [
             "youtube.com",
@@ -2986,7 +3107,7 @@ class VideoDownloader:
             # 检查URL中是否包含播放列表参数
             if 'list=' in url:
                 return True
-        
+
         return False
 
     def is_x_playlist_url(self, url: str) -> tuple:
@@ -3028,7 +3149,8 @@ class VideoDownloader:
                             'playlist_url': url,
                             'entries': entries
                         }
-                        logger.info(f"检测到X播放列表: {playlist_info['playlist_title']}, 共{len(entries)}个视频")
+                        logger.info(
+                            f"检测到X播放列表: {playlist_info['playlist_title']}, 共{len(entries)}个视频")
                         return True, playlist_info
 
                 # 检查是否有多个条目
@@ -3039,7 +3161,8 @@ class VideoDownloader:
                         'playlist_url': url,
                         'entries': info['entries']
                     }
-                    logger.info(f"检测到X播放列表: {playlist_info['playlist_title']}, 共{len(info['entries'])}个视频")
+                    logger.info(
+                        f"检测到X播放列表: {playlist_info['playlist_title']}, 共{len(info['entries'])}个视频")
                     return True, playlist_info
 
             return False, None
@@ -3082,8 +3205,6 @@ class VideoDownloader:
             return True, uid
         return False, None
 
-
-
     def is_bilibili_ugc_season(self, url: str) -> tuple:
         """
         检查是否为B站UGC合集，并提取BV号和合集ID
@@ -3108,7 +3229,8 @@ class VideoDownloader:
                     headers = {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                     }
-                    response = requests.get(url, headers=headers, allow_redirects=True, timeout=10)
+                    response = requests.get(
+                        url, headers=headers, allow_redirects=True, timeout=10)
                     real_url = response.url
                     logger.info(f"🔄 短链接解析结果: {real_url}")
 
@@ -3147,7 +3269,8 @@ class VideoDownloader:
                 if ugc_season:
                     season_id = str(ugc_season.get('id'))
                     season_title = ugc_season.get('title', '未知合集')
-                    logger.info(f"✅ 检测到UGC合集: {season_title} (Season ID: {season_id})")
+                    logger.info(
+                        f"✅ 检测到UGC合集: {season_title} (Season ID: {season_id})")
                     return True, bv_id, season_id
 
             return False, None, None
@@ -3213,12 +3336,14 @@ class VideoDownloader:
                     if info and '_type' in info and info['_type'] == 'playlist':
                         entries = info.get('entries', [])
                         if len(entries) > 1:
-                            logger.info(f"✅ 检测到B站多内容视频: {bv_id}, 共{len(entries)}个条目")
+                            logger.info(
+                                f"✅ 检测到B站多内容视频: {bv_id}, 共{len(entries)}个条目")
                             return True, bv_id
 
                     # 检查是否有分P信息
                     if info and 'entries' in info and len(info['entries']) > 1:
-                        logger.info(f"✅ 检测到B站多内容视频: {bv_id}, 共{len(info['entries'])}个条目")
+                        logger.info(
+                            f"✅ 检测到B站多内容视频: {bv_id}, 共{len(info['entries'])}个条目")
                         return True, bv_id
             except Exception as e:
                 logger.warning(f"快速检测失败: {e}")
@@ -3259,12 +3384,14 @@ class VideoDownloader:
                     if info and '_type' in info and info['_type'] == 'playlist':
                         entries = info.get('entries', [])
                         if len(entries) > 1:
-                            logger.info(f"✅ 完整检测发现B站多内容视频: {bv_id}, 共{len(entries)}个条目")
+                            logger.info(
+                                f"✅ 完整检测发现B站多内容视频: {bv_id}, 共{len(entries)}个条目")
                             return True, bv_id
 
                     # 检查是否有分P信息
                     if info and 'entries' in info and len(info['entries']) > 1:
-                        logger.info(f"✅ 完整检测发现B站多内容视频: {bv_id}, 共{len(info['entries'])}个条目")
+                        logger.info(
+                            f"✅ 完整检测发现B站多内容视频: {bv_id}, 共{len(info['entries'])}个条目")
                         return True, bv_id
 
                     # 检查是否包含anthology信息（B站合集的特征）
@@ -3295,7 +3422,8 @@ class VideoDownloader:
 
                         with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
                             with yt_dlp.YoutubeDL(simulate_opts) as sim_ydl:
-                                sim_info = sim_ydl.extract_info(url, download=False)
+                                sim_info = sim_ydl.extract_info(
+                                    url, download=False)
 
                         # 检查捕获的输出中是否包含anthology
                         stdout_output = stdout_capture.getvalue().lower()
@@ -3314,7 +3442,8 @@ class VideoDownloader:
 
                         # 检查是否有多个entries
                         if sim_info and 'entries' in sim_info and len(sim_info['entries']) > 1:
-                            logger.info(f"✅ 模拟下载检测到多个条目: {bv_id}, 共{len(sim_info['entries'])}个")
+                            logger.info(
+                                f"✅ 模拟下载检测到多个条目: {bv_id}, 共{len(sim_info['entries'])}个")
                             return True, bv_id
 
                     except Exception as sim_e:
@@ -3339,12 +3468,14 @@ class VideoDownloader:
                                     'flat_playlist': True,
                                 }
                                 with yt_dlp.YoutubeDL(user_opts) as user_ydl:
-                                    user_info = user_ydl.extract_info(user_space_url, download=False)
+                                    user_info = user_ydl.extract_info(
+                                        user_space_url, download=False)
 
                                 if user_info and 'entries' in user_info:
                                     user_entries = user_info['entries']
                                     if len(user_entries) > 1:
-                                        logger.info(f"✅ 用户空间检测到多个视频: {len(user_entries)}个，可能是合集分享")
+                                        logger.info(
+                                            f"✅ 用户空间检测到多个视频: {len(user_entries)}个，可能是合集分享")
                                         return True, bv_id
                             except Exception as user_e:
                                 logger.warning(f"用户空间检测失败: {user_e}")
@@ -3379,8 +3510,6 @@ class VideoDownloader:
         logger.info("❌ 未检测到播放列表参数")
         return False, None
 
-
-
     def is_youtube_channel_playlists_url(self, url: str) -> tuple:
         """检查是否为 YouTube 频道播放列表页面 URL 或频道主页 URL"""
         import re
@@ -3402,8 +3531,10 @@ class VideoDownloader:
         channel_patterns = [
             r"(?:m\.)?youtube\.com/@([^/\?]+)(?:\?.*)?$",  # @username 格式
             r"(?:m\.)?youtube\.com/c/([^/\?]+)(?:\?.*)?$",  # /c/channel 格式
-            r"(?:m\.)?youtube\.com/channel/([^/\?]+)(?:\?.*)?$",  # /channel/ID 格式
-            r"(?:m\.)?youtube\.com/user/([^/\?]+)(?:\?.*)?$",  # /user/username 格式
+            # /channel/ID 格式
+            r"(?:m\.)?youtube\.com/channel/([^/\?]+)(?:\?.*)?$",
+            # /user/username 格式
+            r"(?:m\.)?youtube\.com/user/([^/\?]+)(?:\?.*)?$",
         ]
         for pattern in channel_patterns:
             match = re.search(pattern, url)
@@ -3546,7 +3677,8 @@ class VideoDownloader:
                         "vcodec": fmt.get("vcodec", "none"),
                         "acodec": fmt.get("acodec", "none"),
                         "format_type": (
-                            "video" if fmt.get("vcodec", "none") != "none" else "audio"
+                            "video" if fmt.get(
+                                "vcodec", "none") != "none" else "audio"
                         ),
                     }
                     if format_info["format_type"] == "video":
@@ -3559,10 +3691,13 @@ class VideoDownloader:
                 )
                 audio_formats.sort(key=lambda x: x["filesize"], reverse=True)
                 # 检查是否有高分辨率格式
-                has_high_res = any(f.get("height", 0) >= 2160 for f in video_formats)
+                has_high_res = any(f.get("height", 0) >=
+                                   2160 for f in video_formats)
                 has_4k = any(f.get("height", 0) >= 2160 for f in video_formats)
-                has_1080p = any(f.get("height", 0) >= 1080 for f in video_formats)
-                has_720p = any(f.get("height", 0) >= 720 for f in video_formats)
+                has_1080p = any(f.get("height", 0) >=
+                                1080 for f in video_formats)
+                has_720p = any(f.get("height", 0) >=
+                               720 for f in video_formats)
                 return {
                     "success": True,
                     "title": info.get("title", "Unknown"),
@@ -3610,7 +3745,8 @@ class VideoDownloader:
             ]
 
             logger.info(f"🔧 执行ffprobe命令: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=True)
 
             if result.returncode != 0:
                 logger.warning(f"⚠️ ffprobe返回非零状态码: {result.returncode}")
@@ -3634,15 +3770,18 @@ class VideoDownloader:
                     media_info["size"] = f"{size / (1024 * 1024):.2f} MB"
 
             # 查找视频流
-            video_streams = [s for s in info.get("streams", []) if s.get("codec_type") == "video"]
+            video_streams = [s for s in info.get(
+                "streams", []) if s.get("codec_type") == "video"]
             logger.info(f"🎬 找到 {len(video_streams)} 个视频流")
 
             video_stream = next(
-                (s for s in info.get("streams", []) if s.get("codec_type") == "video"),
+                (s for s in info.get("streams", [])
+                 if s.get("codec_type") == "video"),
                 None,
             )
             if video_stream:
-                width, height = video_stream.get("width"), video_stream.get("height")
+                width, height = video_stream.get(
+                    "width"), video_stream.get("height")
                 logger.info(f"🔍 视频流信息: width={width}, height={height}")
                 logger.info(f"🔍 视频编码: {video_stream.get('codec_name', '未知')}")
 
@@ -3651,15 +3790,18 @@ class VideoDownloader:
                     media_info["resolution"] = resolution
                     logger.info(f"✅ 获取到分辨率: {media_info['resolution']}")
                 else:
-                    logger.warning(f"⚠️ 视频流中没有宽高信息: width={width}, height={height}")
+                    logger.warning(
+                        f"⚠️ 视频流中没有宽高信息: width={width}, height={height}")
                     # 尝试从文件名推断分辨率
                     filename = os.path.basename(file_path)
-                    resolution_from_filename = self._extract_resolution_from_filename(filename)
+                    resolution_from_filename = self._extract_resolution_from_filename(
+                        filename)
                     if resolution_from_filename:
                         # 检查是否已经包含质量标识，避免重复
                         if "(" in resolution_from_filename and ")" in resolution_from_filename:
                             media_info["resolution"] = resolution_from_filename
-                            logger.info(f"📝 从文件名推断分辨率（已包含质量标识）: {resolution_from_filename}")
+                            logger.info(
+                                f"📝 从文件名推断分辨率（已包含质量标识）: {resolution_from_filename}")
                         else:
                             # 如果没有质量标识，添加一个
                             if height >= 2160:
@@ -3677,10 +3819,12 @@ class VideoDownloader:
                             # 检查resolution_from_filename是否已经包含质量标识
                             if "(" in resolution_from_filename and ")" in resolution_from_filename:
                                 media_info["resolution"] = resolution_from_filename
-                                logger.info(f"📝 从文件名推断分辨率（已包含质量标识）: {media_info['resolution']}")
+                                logger.info(
+                                    f"📝 从文件名推断分辨率（已包含质量标识）: {media_info['resolution']}")
                             else:
                                 media_info["resolution"] = f"{resolution_from_filename} ({quality})"
-                                logger.info(f"📝 从文件名推断分辨率（添加质量标识）: {media_info['resolution']}")
+                                logger.info(
+                                    f"📝 从文件名推断分辨率（添加质量标识）: {media_info['resolution']}")
                     else:
                         logger.warning("⚠️ 没有找到视频流")
                         # 不尝试从文件名推断分辨率，避免与实际分辨率冲突
@@ -3689,7 +3833,8 @@ class VideoDownloader:
                         logger.info(f"📝 无法获取视频分辨率，标记为未知")
 
             audio_stream = next(
-                (s for s in info.get("streams", []) if s.get("codec_type") == "audio"),
+                (s for s in info.get("streams", [])
+                 if s.get("codec_type") == "audio"),
                 None,
             )
             if audio_stream:
@@ -3743,7 +3888,8 @@ class VideoDownloader:
                 if match:
                     if 'x' in pattern:
                         # 宽x高格式
-                        width, height = int(match.group(1)), int(match.group(2))
+                        width, height = int(
+                            match.group(1)), int(match.group(2))
                         resolution = f"{width}x{height}"
                         return resolution
 
@@ -3832,7 +3978,8 @@ class VideoDownloader:
                 # 构造最终文件名（优先查找.mp4，然后是其他格式）
                 possible_extensions = [".mp4", ".mkv", ".webm", ".avi", ".mov"]
                 for ext in possible_extensions:
-                    final_merged_file = original_path.parent / f"{base_name}{ext}"
+                    final_merged_file = original_path.parent / \
+                        f"{base_name}{ext}"
                     logger.info(f"🔍 尝试查找合并后的文件: {final_merged_file}")
 
                     if os.path.exists(final_merged_file):
@@ -3848,7 +3995,7 @@ class VideoDownloader:
 
                 # 检查是否为YouTube音频模式，如果是则查找对应的MP3文件
                 if (hasattr(self, 'bot') and hasattr(self.bot, 'youtube_audio_mode') and
-                    self.bot.youtube_audio_mode and self.is_youtube_url(url)):
+                        self.bot.youtube_audio_mode and self.is_youtube_url(url)):
                     # 将原始文件扩展名替换为.mp3
                     original_path = Path(final_file_path)
                     mp3_path = original_path.with_suffix('.mp3')
@@ -3872,17 +4019,21 @@ class VideoDownloader:
                     if is_dash_intermediate:
                         logger.info(f"🔍 检测到DASH中间文件，尝试查找合并后的文件: {filename}")
                         # 尝试查找合并后的文件
-                        base_name = filename.split('.f')[0] if '.f' in filename else filename.split('.')[0]
+                        base_name = filename.split(
+                            '.f')[0] if '.f' in filename else filename.split('.')[0]
                         ext = '.mp4'  # 合并后通常是mp4格式
-                        final_merged_file = original_path.parent / f"{base_name}{ext}"
+                        final_merged_file = original_path.parent / \
+                            f"{base_name}{ext}"
 
                         if os.path.exists(final_merged_file):
                             logger.info(f"✅ 找到DASH合并后的文件: {final_merged_file}")
                             return str(final_merged_file)
                         else:
-                            logger.info(f"🔍 DASH合并文件不存在，将使用其他方法查找: {final_merged_file}")
+                            logger.info(
+                                f"🔍 DASH合并文件不存在，将使用其他方法查找: {final_merged_file}")
                     else:
-                        logger.warning(f"⚠️ progress_hook记录的文件路径不存在: {final_file_path}")
+                        logger.warning(
+                            f"⚠️ progress_hook记录的文件路径不存在: {final_file_path}")
 
         # 2. 基于预期文件名查找
         if expected_title:
@@ -3925,12 +4076,16 @@ class VideoDownloader:
                             if safe_title:
                                 logger.info(f"🔍 X平台标题: {safe_title}")
                                 # 尝试不同的扩展名
-                                possible_extensions = [".mp4", ".mkv", ".webm", ".avi", ".mov"]
+                                possible_extensions = [
+                                    ".mp4", ".mkv", ".webm", ".avi", ".mov"]
                                 for ext in possible_extensions:
-                                    expected_file = download_path / f"{safe_title}{ext}"
-                                    logger.info(f"🔍 尝试查找X平台文件: {expected_file}")
+                                    expected_file = download_path / \
+                                        f"{safe_title}{ext}"
+                                    logger.info(
+                                        f"🔍 尝试查找X平台文件: {expected_file}")
                                     if os.path.exists(expected_file):
-                                        logger.info(f"✅ 找到X平台文件: {expected_file}")
+                                        logger.info(
+                                            f"✅ 找到X平台文件: {expected_file}")
                                         return str(expected_file)
 
                                 logger.warning(f"⚠️ 未找到X平台文件，标题: {safe_title}")
@@ -3961,30 +4116,36 @@ class VideoDownloader:
                                 if safe_title:
                                     logger.info(f"🔍 其他平台标题: {safe_title}")
                                     # 尝试不同的扩展名
-                                    possible_extensions = [".mp4", ".mkv", ".webm", ".avi", ".mov"]
+                                    possible_extensions = [
+                                        ".mp4", ".mkv", ".webm", ".avi", ".mov"]
                                     for ext in possible_extensions:
-                                        expected_file = download_path / f"{safe_title}{ext}"
-                                        logger.info(f"🔍 尝试查找其他平台文件: {expected_file}")
+                                        expected_file = download_path / \
+                                            f"{safe_title}{ext}"
+                                        logger.info(
+                                            f"🔍 尝试查找其他平台文件: {expected_file}")
                                         if os.path.exists(expected_file):
-                                            logger.info(f"✅ 找到其他平台文件: {expected_file}")
+                                            logger.info(
+                                                f"✅ 找到其他平台文件: {expected_file}")
                                             return str(expected_file)
 
-                                    logger.warning(f"⚠️ 未找到其他平台文件，标题: {safe_title}")
+                                    logger.warning(
+                                        f"⚠️ 未找到其他平台文件，标题: {safe_title}")
             except Exception as e:
                 logger.warning(f"⚠️ 平台特定查找失败: {e}")
 
         # 4. 最后尝试：扫描下载目录中的所有视频文件
         logger.info("🔍 最后尝试：扫描下载目录中的所有视频文件")
         try:
-            video_extensions = ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.m4a', '.mp3']
+            video_extensions = ['.mp4', '.mkv',
+                                '.webm', '.avi', '.mov', '.m4a', '.mp3']
             all_files = []
-            
+
             for file_path in download_path.rglob('*'):
                 if file_path.is_file() and file_path.suffix.lower() in video_extensions:
                     # 获取文件的修改时间
                     mtime = file_path.stat().st_mtime
                     all_files.append((file_path, mtime))
-            
+
             if all_files:
                 # 按修改时间排序，最新的文件优先
                 all_files.sort(key=lambda x: x[1], reverse=True)
@@ -4066,7 +4227,8 @@ class VideoDownloader:
                 progress_hook = message_updater(progress_data)
             else:
                 # 否则使用标准的 single_video_progress_hook
-                progress_hook = single_video_progress_hook(message_updater, progress_data, status_message, context)
+                progress_hook = single_video_progress_hook(
+                    message_updater, progress_data, status_message, context)
 
             ydl_opts["progress_hooks"] = [progress_hook]
 
@@ -4080,7 +4242,8 @@ class VideoDownloader:
 
                 # 检查info的类型，确保它是字典
                 if not isinstance(info, dict):
-                    logger.error(f"❌ yt-dlp 返回了非字典类型的结果: {type(info)}, 内容: {info}")
+                    logger.error(
+                        f"❌ yt-dlp 返回了非字典类型的结果: {type(info)}, 内容: {info}")
                     raise Exception(f"yt-dlp 返回了意外的数据类型: {type(info)}")
 
                 # 查找下载的文件
@@ -4111,11 +4274,13 @@ class VideoDownloader:
                     file_ext = os.path.splitext(filename)[1]
 
                     # 获取原始标题并清理
-                    original_title = info.get('title', f'{platform_name}_{content_type}')
+                    original_title = info.get(
+                        'title', f'{platform_name}_{content_type}')
                     clean_title = self._sanitize_filename(original_title)
 
                     # 构建新的文件名
-                    new_filename = os.path.join(file_dir, f"{clean_title}{file_ext}")
+                    new_filename = os.path.join(
+                        file_dir, f"{clean_title}{file_ext}")
 
                     # 如果新文件名与旧文件名不同，则重命名
                     if new_filename != original_filename:
@@ -4123,7 +4288,8 @@ class VideoDownloader:
                         counter = 1
                         final_filename = new_filename
                         while os.path.exists(final_filename):
-                            name_without_ext = os.path.splitext(new_filename)[0]
+                            name_without_ext = os.path.splitext(new_filename)[
+                                0]
                             final_filename = f"{name_without_ext}_{counter}{file_ext}"
                             counter += 1
 
@@ -4142,7 +4308,8 @@ class VideoDownloader:
                 file_size = os.path.getsize(filename)
                 size_mb = file_size / 1024 / 1024
 
-                logger.info(f"✅ {platform_name} {content_type}下载成功: {filename} ({size_mb:.1f} MB)")
+                logger.info(
+                    f"✅ {platform_name} {content_type}下载成功: {filename} ({size_mb:.1f} MB)")
 
                 # 构建返回结果
                 result = {
@@ -4235,7 +4402,7 @@ class VideoDownloader:
         try:
             # 移除时间戳前缀
             if original_filename.startswith(f"{timestamp}_"):
-                display_name = original_filename[len(f"{timestamp}_") :]
+                display_name = original_filename[len(f"{timestamp}_"):]
             else:
                 display_name = original_filename
             # 如果文件名太长，截断它
@@ -4296,14 +4463,17 @@ class VideoDownloader:
                 formats = info.get('formats', [])
                 if formats:
                     # 查找有视频编码的格式
-                    video_formats = [f for f in formats if f.get('vcodec') and f.get('vcodec') != 'none']
+                    video_formats = [f for f in formats if f.get(
+                        'vcodec') and f.get('vcodec') != 'none']
                     if video_formats:
-                        logger.info(f"🎬 yt-dlp 检测到视频内容，找到 {len(video_formats)} 个视频格式")
+                        logger.info(
+                            f"🎬 yt-dlp 检测到视频内容，找到 {len(video_formats)} 个视频格式")
                         return "video"
 
                 # 检查其他视频指标
                 if info.get('duration') and info.get('duration') > 0:
-                    logger.info(f"🎬 yt-dlp 通过时长检测到视频内容: {info.get('duration')}秒")
+                    logger.info(
+                        f"🎬 yt-dlp 通过时长检测到视频内容: {info.get('duration')}秒")
                     return "video"
 
                 # 检查文件扩展名（视频优先）
@@ -4370,9 +4540,11 @@ class VideoDownloader:
                 html_content = result.stdout.decode('utf-8')
             except UnicodeDecodeError:
                 try:
-                    html_content = gzip.decompress(result.stdout).decode('utf-8')
+                    html_content = gzip.decompress(
+                        result.stdout).decode('utf-8')
                 except Exception:
-                    html_content = result.stdout.decode('utf-8', errors='ignore')
+                    html_content = result.stdout.decode(
+                        'utf-8', errors='ignore')
 
             # 检测视频相关的 HTML 元素
             video_patterns = [
@@ -4427,8 +4599,10 @@ class VideoDownloader:
         self, url: str, message_updater=None, auto_playlist=False, status_message=None, loop=None, context=None
     ) -> Dict[str, Any]:
         logger.info(f"🚀 [DOWNLOAD_VIDEO] 函数被调用，URL: {url}")
-        logger.info(f"🚀 [DOWNLOAD_VIDEO] message_updater类型: {type(message_updater)}")
-        logger.info(f"🚀 [DOWNLOAD_VIDEO] message_updater是否为None: {message_updater is None}")
+        logger.info(
+            f"🚀 [DOWNLOAD_VIDEO] message_updater类型: {type(message_updater)}")
+        logger.info(
+            f"🚀 [DOWNLOAD_VIDEO] message_updater是否为None: {message_updater is None}")
         # 自动修正小红书短链协议
         if url.startswith("tp://"):
             logger.info("检测到 tp:// 协议，自动修正为 http://")
@@ -4447,17 +4621,17 @@ class VideoDownloader:
                 logger.info(f"🔄 使用展开后的微博链接: {url}")
             else:
                 logger.info(f"ℹ️ URL无需展开或展开失败，继续使用原URL: {url}")
-        
+
         # 首先进行URL清理，提取纯链接
         original_url = url
-        
+
         # 检查是否需要URL清理（包含中文描述或缺少协议前缀）
-        needs_cleanup = (' ' in url or '（' in url or '）' in url or '《' in url or '》' in url or '@' in url or 
-                        not url.startswith(('http://', 'https://')))
-        
+        needs_cleanup = (' ' in url or '（' in url or '）' in url or '《' in url or '》' in url or '@' in url or
+                         not url.startswith(('http://', 'https://')))
+
         if needs_cleanup:
             logger.info(f"🔧 检测到需要清理的URL，开始清理: {url}")
-            
+
             # 优先使用专门的网易云音乐URL清理方法
             clean_url = self._clean_netease_url_special(url)
             if clean_url and clean_url != url:
@@ -4477,7 +4651,7 @@ class VideoDownloader:
                         logger.info(f"🔧 添加协议前缀后: {url}")
                     else:
                         logger.warning(f"⚠️ URL清理失败，使用原始URL: {url}")
-        
+
         # 通用URL重定向检测和平台重新识别（完全跳过网易云音乐链接）
         if not self.is_netease_url(url):
             logger.info(f"🔄 开始URL重定向检测: {url}")
@@ -4490,17 +4664,19 @@ class VideoDownloader:
                 }
                 with yt_dlp.YoutubeDL(temp_opts) as ydl:
                     temp_info = ydl.extract_info(url, download=False)
-                
+
                 if temp_info and temp_info.get("webpage_url") and temp_info["webpage_url"] != url:
                     redirected_url = temp_info["webpage_url"]
                     logger.info(f"🔄 检测到URL重定向: {url} -> {redirected_url}")
-                    
+
                     # 检查重定向后的URL是否为网易云音乐
                     if self.is_netease_url(redirected_url) and not self.is_netease_url(url):
-                        logger.info(f"🎵 重定向后检测到网易云音乐链接，更新URL: {redirected_url}")
+                        logger.info(
+                            f"🎵 重定向后检测到网易云音乐链接，更新URL: {redirected_url}")
                         url = redirected_url
                     elif self.is_apple_music_url(redirected_url) and not self.is_apple_music_url(url):
-                        logger.info(f"🍎 重定向后检测到Apple Music链接，更新URL: {redirected_url}")
+                        logger.info(
+                            f"🍎 重定向后检测到Apple Music链接，更新URL: {redirected_url}")
                         url = redirected_url
                     # 可以添加其他平台的重定向检测
             except Exception as e:
@@ -4514,7 +4690,7 @@ class VideoDownloader:
                 logger.warning(f"⚠️ 网易云音乐URL缺少协议前缀，自动添加: {url}")
                 url = 'https://' + url
                 logger.info(f"🔧 修复后的URL: {url}")
-        
+
         # 添加详细的调试日志
         logger.info(f"🔍 download_video 开始处理URL: {url}")
         logger.info(f"🔍 自动下载全集模式: {'开启' if auto_playlist else '关闭'}")
@@ -4526,7 +4702,8 @@ class VideoDownloader:
         is_multi_part, bv_id = self.is_bilibili_multi_part_video(url)
         logger.info(f"🔍 即将调用is_youtube_playlist_url检查: {url}")
         is_youtube_playlist, playlist_id = self.is_youtube_playlist_url(url)
-        logger.info(f"🎯 is_youtube_playlist_url返回结果: is_playlist={is_youtube_playlist}, playlist_id={playlist_id}")
+        logger.info(
+            f"🎯 is_youtube_playlist_url返回结果: is_playlist={is_youtube_playlist}, playlist_id={playlist_id}")
 
         # 检查是否为Mix播放列表但功能关闭的情况，需要清理URL
         is_mix_playlist_disabled = False
@@ -4543,8 +4720,10 @@ class VideoDownloader:
             logger.info(f"🔗 原始URL: {original_url}")
             logger.info(f"🔗 清理后URL: {url}")
             is_mix_playlist_disabled = True
-        is_youtube_channel, channel_url = self.is_youtube_channel_playlists_url(url)
-        logger.info(f"🔍 YouTube频道识别结果: is_youtube_channel={is_youtube_channel}, channel_url={channel_url}")
+        is_youtube_channel, channel_url = self.is_youtube_channel_playlists_url(
+            url)
+        logger.info(
+            f"🔍 YouTube频道识别结果: is_youtube_channel={is_youtube_channel}, channel_url={channel_url}")
         is_x = self.is_x_url(url)
         is_telegraph = self.is_telegraph_url(url)
         is_douyin = self.is_douyin_url(url)
@@ -4569,7 +4748,8 @@ class VideoDownloader:
         logger.info(
             f"  - is_youtube_playlist: {is_youtube_playlist}, playlist_id: {playlist_id}"
         )
-        logger.info(f"  - is_youtube_channel: {is_youtube_channel}, channel_url: {channel_url if is_youtube_channel else 'None'}")
+        logger.info(
+            f"  - is_youtube_channel: {is_youtube_channel}, channel_url: {channel_url if is_youtube_channel else 'None'}")
         logger.info(f"  - is_x_url: {is_x}")
         logger.info(f"  - is_telegraph_url: {is_telegraph}")
         logger.info(f"  - is_netease_url: {is_netease}")
@@ -4604,6 +4784,7 @@ class VideoDownloader:
         if is_douyin:
             logger.info("🎬 检测到抖音链接，使用Playwright方法下载")
             # 创建一个模拟的message对象用于Playwright方法
+
             class MockMessage:
                 def __init__(self, chat_id=0):
                     self.chat_id = chat_id
@@ -4616,6 +4797,7 @@ class VideoDownloader:
         if is_kuaishou:
             logger.info("⚡ 检测到快手链接，使用Playwright方法下载")
             # 创建一个模拟的message对象用于Playwright方法
+
             class MockMessage:
                 def __init__(self, chat_id=0):
                     self.chat_id = chat_id
@@ -4632,17 +4814,18 @@ class VideoDownloader:
         # 处理小红书链接 - 检测内容类型并选择合适的下载方法
         if self.is_xiaohongshu_url(url):
             logger.info("📖 检测到小红书链接")
-            
+
             # 检测内容类型（图片或视频）
             content_type = await self._detect_xiaohongshu_content_type(url)
             logger.info(f"📊 小红书内容类型: {content_type}")
-            
+
             if content_type == "image":
                 logger.info("🖼️ 检测到小红书图片，使用xiaohongshu_downloader方法下载")
                 return await self._download_xiaohongshu_image_with_downloader(url, message_updater)
             else:
                 logger.info("🎬 检测到小红书视频，使用Playwright方法下载")
                 # 创建一个模拟的message对象用于Playwright方法
+
                 class MockMessage:
                     def __init__(self, chat_id=0):
                         self.chat_id = chat_id
@@ -4671,7 +4854,8 @@ class VideoDownloader:
             # 根据环境变量显示不同的日志信息
             use_amd = os.environ.get("AMDP", "false").lower() == "true"
             if use_amd:
-                logger.info("🍎 检测到 Apple Music 链接，使用 Apple Music Plus 下载器 (AMD)")
+                logger.info(
+                    "🍎 检测到 Apple Music 链接，使用 Apple Music Plus 下载器 (AMD)")
             else:
                 logger.info("🍎 检测到 Apple Music 链接，使用 Apple Music 下载器 (GAMDL)")
             return await self._download_apple_music(url, download_path, message_updater, status_message, context)
@@ -4684,7 +4868,8 @@ class VideoDownloader:
                 channel_url, download_path, message_updater, status_message, loop
             )
         # 处理 YouTube 播放列表
-        logger.info(f"🔍 检查YouTube播放列表分支: is_youtube_playlist={is_youtube_playlist}")
+        logger.info(
+            f"🔍 检查YouTube播放列表分支: is_youtube_playlist={is_youtube_playlist}")
         if is_youtube_playlist:
             logger.info(f"✅ 检测到YouTube播放列表，播放列表ID: {playlist_id}")
 
@@ -4723,10 +4908,12 @@ class VideoDownloader:
 
                     def progress_callback(d):
                         # 强制日志，确保能看到进度回调被调用
-                        logger.info(f"🔍 [SINGLE_PLAYLIST_PROGRESS_CALLBACK] 被调用: status={d.get('status')}, filename={d.get('filename', 'N/A')}")
+                        logger.info(
+                            f"🔍 [SINGLE_PLAYLIST_PROGRESS_CALLBACK] 被调用: status={d.get('status')}, filename={d.get('filename', 'N/A')}")
 
                         if d.get("status") == "downloading":
-                            logger.info(f"🔍 单个YouTube播放列表进度回调: status={d.get('status')}, filename={d.get('filename', 'N/A')}")
+                            logger.info(
+                                f"🔍 单个YouTube播放列表进度回调: status={d.get('status')}, filename={d.get('filename', 'N/A')}")
                             # 修正当前视频序号为本播放列表的当前下载视频序号/总数
                             cur_idx = (
                                 d.get("playlist_index")
@@ -4748,7 +4935,8 @@ class VideoDownloader:
                                 progress_text = f"📺 当前视频: {escape_num(cur_idx)}/{escape_num(total_idx)}\n"
                             percent = 0
                             if d.get("filename"):
-                                filename = os.path.basename(d.get("filename", ""))
+                                filename = os.path.basename(
+                                    d.get("filename", ""))
                                 total_bytes = d.get("total_bytes") or d.get(
                                     "total_bytes_estimate", 0
                                 )
@@ -4756,17 +4944,20 @@ class VideoDownloader:
                                 speed_bytes_s = d.get("speed", 0)
                                 eta_seconds = d.get("eta", 0)
                                 if total_bytes and total_bytes > 0:
-                                    downloaded_mb = downloaded_bytes / (1024 * 1024)
+                                    downloaded_mb = downloaded_bytes / \
+                                        (1024 * 1024)
                                     total_mb = total_bytes / (1024 * 1024)
                                     speed_mb_s = (
                                         speed_bytes_s / (1024 * 1024)
                                         if speed_bytes_s
                                         else 0
                                     )
-                                    percent = int(downloaded_bytes * 100 / total_bytes)
+                                    percent = int(
+                                        downloaded_bytes * 100 / total_bytes)
                                     bar = self._make_progress_bar(percent)
                                     try:
-                                        minutes, seconds = divmod(int(eta_seconds), 60)
+                                        minutes, seconds = divmod(
+                                            int(eta_seconds), 60)
                                         eta_str = f"{minutes:02d}:{seconds:02d}"
                                     except (ValueError, TypeError):
                                         eta_str = "未知"
@@ -4805,7 +4996,8 @@ class VideoDownloader:
                             if (abs(percent - last_update["percent"]) >= 5) or (now - last_update["time"] > 1):
                                 if progress_text != last_update["text"]:
                                     # 更新进度消息
-                                    logger.info(f"🔄 单个播放列表更新进度消息: percent={percent}%")
+                                    logger.info(
+                                        f"🔄 单个播放列表更新进度消息: percent={percent}%")
                                 last_update["percent"] = percent
                                 last_update["time"] = now
                                 last_update["text"] = progress_text
@@ -4819,24 +5011,29 @@ class VideoDownloader:
                                             # 异步函数，需要在事件循环中运行
                                             if captured_loop:
                                                 future = asyncio.run_coroutine_threadsafe(
-                                                    captured_message_updater(progress_text), captured_loop
+                                                    captured_message_updater(
+                                                        progress_text), captured_loop
                                                 )
                                                 future.result(timeout=3.0)
                                             else:
-                                                logger.warning(f"⚠️ 没有事件循环，无法调用异步函数")
+                                                logger.warning(
+                                                    f"⚠️ 没有事件循环，无法调用异步函数")
                                         else:
                                             # 同步函数，直接调用
-                                            captured_message_updater(progress_text)
+                                            captured_message_updater(
+                                                progress_text)
                                     except Exception as e:
                                         # 简化错误处理
                                         if "Message is not modified" not in str(e):
                                             logger.warning(f"❌ 进度更新失败: {e}")
                                         # 记录进度到日志（降级处理）
-                                        logger.debug(f"📊 进度更新: {progress_text}")
+                                        logger.debug(
+                                            f"📊 进度更新: {progress_text}")
 
                     return progress_callback
 
-                progress_callback = create_single_playlist_progress_callback(playlist_progress_data)
+                progress_callback = create_single_playlist_progress_callback(
+                    playlist_progress_data)
                 logger.info(f"🔧 为单个播放列表创建进度回调函数: {type(progress_callback)}")
             else:
                 progress_callback = None
@@ -4849,14 +5046,18 @@ class VideoDownloader:
             logger.info(f"❌ 不是YouTube播放列表，继续其他处理逻辑")
         # 如果是B站链接，根据设置选择下载器
         if self.is_bilibili_url(url):
-            logger.info(f"🔍 B站链接检测结果: is_user_lists={is_user_lists}, user_uid={user_uid}")
-            logger.info(f"🔍 B站链接检测结果: is_ugc_season={is_ugc_season}, ugc_bv_id={ugc_bv_id}, season_id={season_id}")
-            logger.info(f"🔍 B站链接检测结果: is_multi_part={is_multi_part}, bv_id={bv_id if 'bv_id' in locals() else 'N/A'}")
+            logger.info(
+                f"🔍 B站链接检测结果: is_user_lists={is_user_lists}, user_uid={user_uid}")
+            logger.info(
+                f"🔍 B站链接检测结果: is_ugc_season={is_ugc_season}, ugc_bv_id={ugc_bv_id}, season_id={season_id}")
+            logger.info(
+                f"🔍 B站链接检测结果: is_multi_part={is_multi_part}, bv_id={bv_id if 'bv_id' in locals() else 'N/A'}")
 
             # 优先处理UP主合集列表页面
             if is_user_lists:
                 logger.info("✅ 检测到B站UP主合集列表页面，开始下载所有视频")
-                logger.info(f"🎯 调用 _download_bilibili_user_all_videos(uid={user_uid})")
+                logger.info(
+                    f"🎯 调用 _download_bilibili_user_all_videos(uid={user_uid})")
                 result = await self._download_bilibili_user_all_videos(user_uid, download_path, message_updater)
                 logger.info(f"🎯 UP主下载结果: {result.get('success', False)}")
                 return result
@@ -4864,7 +5065,8 @@ class VideoDownloader:
             # 优先处理UGC合集
             if is_ugc_season:
                 # 检查UGC播放列表配置
-                ugc_playlist_enabled = getattr(self.bot, 'bilibili_ugc_playlist', True) if hasattr(self, 'bot') else True
+                ugc_playlist_enabled = getattr(
+                    self.bot, 'bilibili_ugc_playlist', True) if hasattr(self, 'bot') else True
                 if ugc_playlist_enabled:
                     logger.info("✅ 检测到B站UGC合集，且UGC播放列表开启，下载整个合集")
                     return await self._download_bilibili_ugc_season(ugc_bv_id, season_id, download_path, message_updater)
@@ -5025,12 +5227,14 @@ class VideoDownloader:
                                 video_files.append((expected_path, mtime))
                                 logger.info(f"✅ 找到预期文件: {expected_filename}")
                             except OSError:
-                                logger.warning(f"⚠️ 无法获取文件时间: {expected_filename}")
+                                logger.warning(
+                                    f"⚠️ 无法获取文件时间: {expected_filename}")
                         else:
                             logger.warning(f"⚠️ 预期文件不存在: {expected_filename}")
                 else:
                     # 其他类型下载：直接使用progress_data中的预期文件列表
-                    expected_files_list = progress_data.get('expected_files', []) if progress_data and isinstance(progress_data, dict) else []
+                    expected_files_list = progress_data.get(
+                        'expected_files', []) if progress_data and isinstance(progress_data, dict) else []
                     logger.info("🔍 使用progress_data中的预期文件列表")
 
                     logger.info(f"📋 预期文件数量: {len(expected_files_list)}")
@@ -5052,13 +5256,15 @@ class VideoDownloader:
                         # 3. 删除YouTube视频ID标识 [video_id]（仅在启用ID标签时）
                         # 只有启用了ID标签功能时才清理ID
                         if hasattr(self, 'bot') and hasattr(self.bot, 'youtube_id_tags') and self.bot.youtube_id_tags:
-                            cleaned = re.sub(r'\[[a-zA-Z0-9_-]{10,12}\]', '', cleaned)
+                            cleaned = re.sub(
+                                r'\[[a-zA-Z0-9_-]{10,12}\]', '', cleaned)
 
                         # 4. 删除 .m4a, .webm 等临时格式，替换为 .mp4
                         cleaned = re.sub(r'\.(webm|m4a|mp3)$', '.mp4', cleaned)
 
                         # 修复可能的双扩展名问题（如 .m4a.mp4 -> .mp4）
-                        cleaned = re.sub(r'\.(webm|m4a|mp3)\.mp4$', '.mp4', cleaned)
+                        cleaned = re.sub(
+                            r'\.(webm|m4a|mp3)\.mp4$', '.mp4', cleaned)
 
                         # 5. 删除序号前缀（如 "23. "），因为预期文件名没有序号
                         cleaned = re.sub(r'^\d+\.\s*', '', cleaned)
@@ -5094,12 +5300,15 @@ class VideoDownloader:
                             base_filename,  # 原始文件名
                             base_title,     # 原始标题
                             f"{base_title}.mp4",  # 标题+.mp4
-                            clean_filename_for_matching(base_filename),  # 清理后的文件名
-                            clean_filename_for_matching(base_title),     # 清理后的标题
+                            clean_filename_for_matching(
+                                base_filename),  # 清理后的文件名
+                            clean_filename_for_matching(
+                                base_title),     # 清理后的标题
                         ]
 
                         # 去重并过滤空值
-                        possible_names = list(dict.fromkeys([name for name in possible_names if name]))
+                        possible_names = list(dict.fromkeys(
+                            [name for name in possible_names if name]))
 
                         found = False
                         for possible_name in possible_names:
@@ -5117,18 +5326,23 @@ class VideoDownloader:
 
                             # 2. 在子目录中查找（递归搜索）
                             for video_ext in ["*.mp4", "*.mkv", "*.webm", "*.avi", "*.mov", "*.flv"]:
-                                matching_files = list(Path(download_path).rglob(video_ext))
+                                matching_files = list(
+                                    Path(download_path).rglob(video_ext))
                                 for file_path in matching_files:
                                     # 检查文件名是否匹配（考虑序号前缀）
                                     actual_filename = file_path.name
-                                    cleaned_actual = clean_filename_for_matching(actual_filename)
-                                    cleaned_expected = clean_filename_for_matching(possible_name)
+                                    cleaned_actual = clean_filename_for_matching(
+                                        actual_filename)
+                                    cleaned_expected = clean_filename_for_matching(
+                                        possible_name)
 
                                     if cleaned_actual == cleaned_expected:
                                         try:
                                             mtime = os.path.getmtime(file_path)
-                                            video_files.append((file_path, mtime))
-                                            logger.info(f"✅ 在子目录找到文件: {file_path.relative_to(download_path)}")
+                                            video_files.append(
+                                                (file_path, mtime))
+                                            logger.info(
+                                                f"✅ 在子目录找到文件: {file_path.relative_to(download_path)}")
                                             found = True
                                             break
                                         except OSError:
@@ -5139,7 +5353,8 @@ class VideoDownloader:
                                 break
 
                         if not found:
-                            logger.warning(f"⚠️ 未找到预期文件: {expected_file.get('title', 'unknown')}")
+                            logger.warning(
+                                f"⚠️ 未找到预期文件: {expected_file.get('title', 'unknown')}")
                             logger.info(f"   尝试的文件名: {possible_names}")
             else:
                 # B站多P下载：智能查找子目录中的文件
@@ -5158,28 +5373,34 @@ class VideoDownloader:
 
                     if subdirs:
                         # 按修改时间排序，找到最新的子目录
-                        latest_subdir = max(subdirs, key=lambda x: x.stat().st_mtime)
+                        latest_subdir = max(
+                            subdirs, key=lambda x: x.stat().st_mtime)
                         logger.info(f"📁 找到最新子目录: {latest_subdir.name}")
 
                         # 在子目录中查找视频文件
-                        video_extensions = ["*.mp4", "*.mkv", "*.webm", "*.avi", "*.mov", "*.flv"]
+                        video_extensions = ["*.mp4", "*.mkv",
+                                            "*.webm", "*.avi", "*.mov", "*.flv"]
                         for ext in video_extensions:
                             matching_files = list(latest_subdir.glob(ext))
                             if matching_files:
-                                logger.info(f"✅ 在子目录中找到 {len(matching_files)} 个 {ext} 文件")
+                                logger.info(
+                                    f"✅ 在子目录中找到 {len(matching_files)} 个 {ext} 文件")
                                 for file_path in matching_files:
                                     try:
                                         mtime = os.path.getmtime(file_path)
                                         video_files.append((file_path, mtime))
-                                        logger.info(f"✅ 找到文件: {file_path.name}")
+                                        logger.info(
+                                            f"✅ 找到文件: {file_path.name}")
                                     except OSError:
                                         continue
                     else:
                         logger.warning("⚠️ 未找到子目录，在根目录查找")
                         # 如果没有子目录，在根目录查找
-                        video_extensions = ["*.mp4", "*.mkv", "*.webm", "*.avi", "*.mov", "*.flv"]
+                        video_extensions = ["*.mp4", "*.mkv",
+                                            "*.webm", "*.avi", "*.mov", "*.flv"]
                         for ext in video_extensions:
-                            matching_files = list(Path(download_path).glob(ext))
+                            matching_files = list(
+                                Path(download_path).glob(ext))
                             for file_path in matching_files:
                                 try:
                                     mtime = os.path.getmtime(file_path)
@@ -5233,9 +5454,12 @@ class VideoDownloader:
                             'resolution': resolution,
                             'abr': media_info.get('bit_rate')
                         })
-                    filename_list = [info['filename'] for info in file_info_list]
-                    filename_display = '\n'.join([f"  {i+1:02d}. {name}" for i, name in enumerate(filename_list)])
-                    resolution_display = ', '.join(sorted(all_resolutions)) if all_resolutions else '未知'
+                    filename_list = [info['filename']
+                                     for info in file_info_list]
+                    filename_display = '\n'.join(
+                        [f"  {i+1:02d}. {name}" for i, name in enumerate(filename_list)])
+                    resolution_display = ', '.join(
+                        sorted(all_resolutions)) if all_resolutions else '未知'
                     return {
                         'success': True,
                         'is_playlist': True,
@@ -5264,7 +5488,8 @@ class VideoDownloader:
                         file_info_list = []
                         all_resolutions = set()
                         for file_path, mtime in video_files:
-                            size_mb = os.path.getsize(file_path) / (1024 * 1024)
+                            size_mb = os.path.getsize(
+                                file_path) / (1024 * 1024)
                             total_size_mb += size_mb
                             media_info = self.get_media_info(str(file_path))
                             resolution = media_info.get('resolution', '未知')
@@ -5276,9 +5501,12 @@ class VideoDownloader:
                                 'resolution': resolution,
                                 'abr': media_info.get('bit_rate')
                             })
-                        filename_list = [info['filename'] for info in file_info_list]
-                        filename_display = '\n'.join([f"  {i+1:02d}. {name}" for i, name in enumerate(filename_list)])
-                        resolution_display = ', '.join(sorted(all_resolutions)) if all_resolutions else '未知'
+                        filename_list = [info['filename']
+                                         for info in file_info_list]
+                        filename_display = '\n'.join(
+                            [f"  {i+1:02d}. {name}" for i, name in enumerate(filename_list)])
+                        resolution_display = ', '.join(
+                            sorted(all_resolutions)) if all_resolutions else '未知'
                         return {
                             'success': True,
                             'is_playlist': True,
@@ -5298,7 +5526,8 @@ class VideoDownloader:
                         video_files.sort(key=lambda x: x[1], reverse=True)
                         final_file_path = str(video_files[0][0])
                         media_info = self.get_media_info(final_file_path)
-                        size_mb = os.path.getsize(final_file_path) / (1024 * 1024)
+                        size_mb = os.path.getsize(
+                            final_file_path) / (1024 * 1024)
                         return {
                             'success': True,
                             'filename': os.path.basename(final_file_path),
@@ -5322,7 +5551,7 @@ class VideoDownloader:
         """下载单个视频（包括YouTube单个视频）"""
         import os
         logger.info(f"🎬 开始下载单个视频: {url}")
-        
+
         # 检查是否为网易云音乐链接，如果是则不应该调用此函数
         if self.is_netease_url(url):
             logger.error(f"❌ 网易云音乐链接不应该调用_download_single_video函数: {url}")
@@ -5342,10 +5571,11 @@ class VideoDownloader:
                 "platform": "QQMusic",
                 "content_type": "music"
             }
-        
+
         # 检查是否为YouTube Music链接，如果是则不应该调用此函数
         if self.is_youtube_music_url(url):
-            logger.error(f"❌ YouTube Music链接不应该调用_download_single_video函数: {url}")
+            logger.error(
+                f"❌ YouTube Music链接不应该调用_download_single_video函数: {url}")
             return {
                 "success": False,
                 "error": "YouTube Music链接不应该调用单视频下载函数",
@@ -5381,7 +5611,8 @@ class VideoDownloader:
                 and os.path.exists(self.youtube_cookies_path)
             ):
                 info_opts["cookiefile"] = self.youtube_cookies_path
-                logger.info(f"🍪 使用YouTube cookies: {self.youtube_cookies_path}")
+                logger.info(
+                    f"🍪 使用YouTube cookies: {self.youtube_cookies_path}")
             if (
                 self.is_douyin_url(url)
                 and self.douyin_cookies_path
@@ -5393,11 +5624,12 @@ class VideoDownloader:
             if "instagram.com" in url.lower():
                 if (
                     hasattr(self, 'instagram_cookies_path') and
-                    self.instagram_cookies_path and 
+                    self.instagram_cookies_path and
                     os.path.exists(self.instagram_cookies_path)
                 ):
                     info_opts["cookiefile"] = self.instagram_cookies_path
-                    logger.info(f"🍪 预先获取信息阶段使用Instagram cookies: {self.instagram_cookies_path}")
+                    logger.info(
+                        f"🍪 预先获取信息阶段使用Instagram cookies: {self.instagram_cookies_path}")
                 else:
                     logger.warning("⚠️ Instagram预先获取信息：cookies未配置，可能导致获取失败")
             logger.info("🔍 步骤2: 开始提取视频信息...")
@@ -5444,23 +5676,27 @@ class VideoDownloader:
                 music_path = download_path / "music"
                 music_path.mkdir(exist_ok=True)  # 确保music目录存在
                 if hasattr(self, 'bot') and hasattr(self.bot, 'youtube_id_tags') and self.bot.youtube_id_tags:
-                    outtmpl = str(music_path.absolute() / f"{title}[%(id)s].%(ext)s")
+                    outtmpl = str(music_path.absolute() /
+                                  f"{title}[%(id)s].%(ext)s")
                 else:
                     outtmpl = str(music_path.absolute() / f"{title}.%(ext)s")
                 logger.info("🎵 音频模式：文件将保存到YouTube/music目录")
             else:
                 # 默认视频模式：使用YouTube根目录
                 if hasattr(self, 'bot') and hasattr(self.bot, 'youtube_id_tags') and self.bot.youtube_id_tags:
-                    outtmpl = str(download_path.absolute() / f"{title}[%(id)s].%(ext)s")
+                    outtmpl = str(download_path.absolute() /
+                                  f"{title}[%(id)s].%(ext)s")
                 else:
-                    outtmpl = str(download_path.absolute() / f"{title}.%(ext)s")
+                    outtmpl = str(download_path.absolute() /
+                                  f"{title}.%(ext)s")
         elif self.is_x_url(url):
             outtmpl = str(download_path.absolute() / f"{title}.%(ext)s")
         else:  # 其他平台
             # Instagram专用文件命名优化
             if "instagram.com" in url.lower():
                 optimized_title = self._optimize_instagram_filename(title)
-                outtmpl = str(download_path.absolute() / f"{optimized_title}.%(ext)s")
+                outtmpl = str(download_path.absolute() /
+                              f"{optimized_title}.%(ext)s")
                 logger.info(f"🎨 Instagram优化文件名: {optimized_title}")
             else:
                 outtmpl = str(download_path.absolute() / f"{title}.%(ext)s")
@@ -5473,7 +5709,7 @@ class VideoDownloader:
         # 🎯 Instagram专用检测和配置（必须在格式设置之前）
         if "instagram.com" in url.lower():
             logger.info("🎯 Instagram检测：设置最高质量格式选择")
-            
+
             # 检查是否有 Instagram 下载器可用
             if hasattr(self, 'instagram_downloader') and self.instagram_downloader:
                 logger.info("📱 使用专门的 Instagram 下载器")
@@ -5485,19 +5721,21 @@ class VideoDownloader:
                 # 使用最高质量格式选择
                 format_spec = "bestvideo+bestaudio/bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio[ext=m4a]/best[height>=1080]/best"
                 merge_format = "mp4"
-            
+
             # 检查并应用Instagram cookies
             if (
-                hasattr(self, 'instagram_cookies_path') and 
-                self.instagram_cookies_path and 
+                hasattr(self, 'instagram_cookies_path') and
+                self.instagram_cookies_path and
                 os.path.exists(self.instagram_cookies_path)
             ):
-                logger.info(f"🍪 Instagram将使用cookies: {self.instagram_cookies_path}")
+                logger.info(
+                    f"🍪 Instagram将使用cookies: {self.instagram_cookies_path}")
             else:
                 logger.warning("⚠️ 检测到Instagram链接但未设置cookies文件")
                 logger.warning("💡 Instagram大部分内容需要登录才能访问")
                 if hasattr(self, 'instagram_cookies_path') and self.instagram_cookies_path:
-                    logger.warning(f"⚠️ Instagram cookies文件不存在: {self.instagram_cookies_path}")
+                    logger.warning(
+                        f"⚠️ Instagram cookies文件不存在: {self.instagram_cookies_path}")
                 else:
                     logger.warning("⚠️ 未设置INSTAGRAM_COOKIES环境变量")
                 logger.warning("📝 请设置INSTAGRAM_COOKIES环境变量指向cookies文件")
@@ -5514,11 +5752,11 @@ class VideoDownloader:
                 format_spec = self._get_bilibili_best_format()
                 logger.info("🎯 检测到B站URL，使用4K优先格式策略")
                 logger.info(f"🔧 设置的格式字符串: {format_spec}")
-                
+
                 # 检查B站会员状态
                 member_status = self.check_bilibili_member_status()
                 logger.info(f"🔍 B站会员状态: {member_status['message']}")
-                
+
                 # 调试B站格式
                 try:
                     debug_result = self.debug_bilibili_formats(url)
@@ -5543,7 +5781,8 @@ class VideoDownloader:
             elif self.is_youtube_url(url):
                 # YouTube专用格式选择策略 - 明确优先4K
                 format_spec = "bestvideo[height>=2160]+bestaudio/bestvideo[height>=1440]+bestaudio/bestvideo[height>=1080]+bestaudio/bestvideo+bestaudio/best"
-                logger.info("🎬 检测到YouTube URL，使用4K优先格式策略 (2160p->1440p->1080p)")
+                logger.info(
+                    "🎬 检测到YouTube URL，使用4K优先格式策略 (2160p->1440p->1080p)")
             elif self.is_toutiao_url(url):
                 # 头条视频专用格式选择策略
                 format_spec = "bestvideo+bestaudio/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[height>=1080]/best"
@@ -5699,22 +5938,24 @@ class VideoDownloader:
         elif self.is_douyin_url(url):
             logger.warning("⚠️ 检测到抖音链接但未设置cookies文件")
             if self.douyin_cookies_path:
-                logger.warning(f"⚠️ 抖音cookies文件不存在: {self.douyin_cookies_path}")
+                logger.warning(
+                    f"⚠️ 抖音cookies文件不存在: {self.douyin_cookies_path}")
             else:
                 logger.warning("⚠️ 未设置DOUYIN_COOKIES环境变量")
-        
+
         # Instagram cookies在前面已经检测过了，这里只需要应用
         if "instagram.com" in url.lower():
             if (
                 hasattr(self, 'instagram_cookies_path') and
-                self.instagram_cookies_path and 
+                self.instagram_cookies_path and
                 os.path.exists(self.instagram_cookies_path)
             ):
                 ydl_opts["cookiefile"] = self.instagram_cookies_path
-                logger.info(f"🍪 为Instagram链接应用cookies: {self.instagram_cookies_path}")
+                logger.info(
+                    f"🍪 为Instagram链接应用cookies: {self.instagram_cookies_path}")
             else:
                 logger.warning("⚠️ Instagram链接：cookies未配置或文件不存在")
-            
+
             # 如果有专门的 Instagram 下载器，使用它来处理
             if hasattr(self, 'instagram_downloader') and self.instagram_downloader:
                 logger.info("📱 使用专门的 Instagram 下载器处理")
@@ -5729,14 +5970,14 @@ class VideoDownloader:
                                     message_updater(text)
                             except Exception as e:
                                 logger.warning(f"Instagram 进度回调失败: {e}")
-                    
+
                     # 调用 Instagram 下载器
                     result = await self.instagram_downloader.download_post(
-                        url, 
-                        str(download_path), 
+                        url,
+                        str(download_path),
                         instagram_progress_callback
                     )
-                    
+
                     if result.get("success"):
                         logger.info(f"✅ Instagram 下载成功: {result}")
                         # 查找下载的文件
@@ -5755,7 +5996,7 @@ class VideoDownloader:
                                     "total_size": result.get("total_size", 0),
                                     "files_count": result.get("files_count", 0)
                                 }
-                        
+
                         return {
                             "success": True,
                             "platform": "instagram",
@@ -5763,12 +6004,13 @@ class VideoDownloader:
                             "result": result
                         }
                     else:
-                        logger.warning(f"⚠️ Instagram 下载器失败，回退到 yt-dlp: {result.get('error')}")
+                        logger.warning(
+                            f"⚠️ Instagram 下载器失败，回退到 yt-dlp: {result.get('error')}")
                         # 继续使用 yt-dlp 处理
                 except Exception as e:
                     logger.error(f"❌ Instagram 下载器异常，回退到 yt-dlp: {e}")
                     # 继续使用 yt-dlp 处理
-            
+
         # 添加代理
         if self.proxy_host:
             ydl_opts["proxy"] = self.proxy_host
@@ -5782,10 +6024,11 @@ class VideoDownloader:
 
         # 使用增强版的 single_video_progress_hook，包含完整的进度显示逻辑
         # 🔧 修复：安全检查 message_updater 是否是增强版进度回调函数
-        logger.info(f"🔍 [PROGRESS_SETUP] message_updater类型: {type(message_updater)}")
+        logger.info(
+            f"🔍 [PROGRESS_SETUP] message_updater类型: {type(message_updater)}")
         logger.info(f"🔍 [PROGRESS_SETUP] status_message: {status_message}")
         logger.info(f"🔍 [PROGRESS_SETUP] context: {context}")
-        
+
         if callable(message_updater) and hasattr(message_updater, '__name__') and message_updater.__name__ == 'enhanced_progress_callback':
             # 如果是增强版进度回调，直接使用它返回的 progress_hook
             logger.info("🔍 [PROGRESS_SETUP] 使用增强版进度回调")
@@ -5794,11 +6037,13 @@ class VideoDownloader:
             except Exception as e:
                 logger.error(f"调用增强版进度回调失败: {e}")
                 # 回退到标准的 single_video_progress_hook，传递 status_message 和 context
-                progress_hook = single_video_progress_hook(message_updater, progress_data, status_message, context)
+                progress_hook = single_video_progress_hook(
+                    message_updater, progress_data, status_message, context)
         else:
             # 否则使用标准的 single_video_progress_hook，传递 status_message 和 context
             logger.info("🔍 [PROGRESS_SETUP] 使用标准进度回调")
-            progress_hook = single_video_progress_hook(message_updater, progress_data, status_message, context)
+            progress_hook = single_video_progress_hook(
+                message_updater, progress_data, status_message, context)
 
         ydl_opts['progress_hooks'] = [progress_hook]
         logger.info("✅ 进度回调已设置")
@@ -5809,7 +6054,7 @@ class VideoDownloader:
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     logger.info("🚀 开始下载视频...")
-                    
+
                     # 获取视频信息
                     try:
                         info = ydl.extract_info(url, download=False)
@@ -5817,7 +6062,7 @@ class VideoDownloader:
                         logger.info(f"📺 视频标题: {title}")
                     except Exception as e:
                         logger.warning(f"⚠️ 获取视频信息失败: {e}")
-                    
+
                     # 开始下载
                     ydl.download([url])
                 return True
@@ -5837,7 +6082,8 @@ class VideoDownloader:
         # 设置60秒超时用于下载
         try:
             success = await asyncio.wait_for(
-                loop.run_in_executor(None, run_download), timeout=600.0  # 增加到10分钟
+                # 增加到10分钟
+                loop.run_in_executor(None, run_download), timeout=600.0
             )
         except asyncio.TimeoutError:
             logger.error("❌ 视频下载超时（10分钟）")
@@ -5846,16 +6092,16 @@ class VideoDownloader:
                 "error": "视频下载超时，请检查网络连接或稍后重试。",
             }
         if not success:
-            error = progress_data.get("error", "下载器在执行时发生未知错误") if progress_data and isinstance(progress_data, dict) else "下载器在执行时发生未知错误"
+            error = progress_data.get("error", "下载器在执行时发生未知错误") if progress_data and isinstance(
+                progress_data, dict) else "下载器在执行时发生未知错误"
             return {"success": False, "error": error}
         # 5. 查找文件并返回结果
         logger.info("🔍 步骤5: 查找下载的文件...")
         time.sleep(1)  # 等待文件系统同步
 
         # 使用单视频文件查找方法
-        final_file_path = self.single_video_find_downloaded_file(download_path, progress_data, title, url)
-
-
+        final_file_path = self.single_video_find_downloaded_file(
+            download_path, progress_data, title, url)
 
         # 处理最终文件
         if final_file_path and os.path.exists(final_file_path):
@@ -5887,8 +6133,6 @@ class VideoDownloader:
                 "error": "下载完成但无法在文件系统中找到最终文件。",
             }
 
-
-
     async def _download_youtube_channel_playlists(
         self, channel_url: str, download_path: Path, message_updater=None, status_message=None, loop=None
     ) -> Dict[str, Any]:
@@ -5905,8 +6149,6 @@ class VideoDownloader:
         except Exception as e:
             logger.warning(f"⚠️ 无法获取事件循环: {e}")
             self._main_loop = None
-
-
 
         # YouTube频道播放列进度管理器 - 专门用于跟踪YouTube频道播放列表下载的总体进度
         global_progress = {
@@ -5948,7 +6190,8 @@ class VideoDownloader:
                 logger.info(f"🌐 使用代理: {self.proxy_host}")
             if self.youtube_cookies_path and os.path.exists(self.youtube_cookies_path):
                 info_opts["cookiefile"] = self.youtube_cookies_path
-                logger.info(f"🍪 使用YouTube cookies: {self.youtube_cookies_path}")
+                logger.info(
+                    f"🍪 使用YouTube cookies: {self.youtube_cookies_path}")
             logger.info("🔍 步骤2: 开始提取频道信息（设置30秒超时）...")
             # 使用异步执行器来添加超时控制
             loop = asyncio.get_running_loop()
@@ -6062,7 +6305,8 @@ class VideoDownloader:
                     entry_url = entry.get("url", "")
 
                     # 统计类型
-                    type_counts[entry_type] = type_counts.get(entry_type, 0) + 1
+                    type_counts[entry_type] = type_counts.get(
+                        entry_type, 0) + 1
 
                     logger.info(
                         f"  📋 条目 {i + 1}: 类型={entry_type}, ID={entry_id}, 标题={entry_title[:50]}..."
@@ -6085,7 +6329,8 @@ class VideoDownloader:
 
             # 输出统计信息
             logger.info(f"📊 条目类型统计: {type_counts}")
-            logger.info(f"📊 过滤结果: 总条目 {len(entries)} 个，播放列表 {len(playlist_entries)} 个")
+            logger.info(
+                f"📊 过滤结果: 总条目 {len(entries)} 个，播放列表 {len(playlist_entries)} 个")
             logger.info(f"📊 总共找到 {len(playlist_entries)} 个播放列表")
 
             if not playlist_entries:
@@ -6140,7 +6385,8 @@ class VideoDownloader:
             else:
                 global_progress["total_videos"] = total_video_count
 
-            logger.info(f"📊 全局进度初始化: {global_progress['total_playlists']} 个播放列表, {global_progress['total_videos']} 个视频")
+            logger.info(
+                f"📊 全局进度初始化: {global_progress['total_playlists']} 个播放列表, {global_progress['total_videos']} 个视频")
 
             downloaded_playlists = []
             playlist_stats = []  # 存储每个播放列表的统计信息
@@ -6154,7 +6400,8 @@ class VideoDownloader:
                 logger.info(f"    📋 播放列表ID: {playlist_id}")
 
                 # 先检查播放列表是否已完整下载
-                check_result = self._check_playlist_already_downloaded(playlist_id, channel_path)
+                check_result = self._check_playlist_already_downloaded(
+                    playlist_id, channel_path)
 
                 if message_updater:
                     try:
@@ -6193,8 +6440,6 @@ class VideoDownloader:
                     last_update = {"percent": -1, "time": 0, "text": ""}
                     import time as _time
 
-
-
                     def escape_num(text):
                         # 转义MarkdownV2特殊字符，包括小数点
                         if not isinstance(text, str):
@@ -6225,10 +6470,12 @@ class VideoDownloader:
 
                     def progress_callback(d):
                         # 强制日志，确保能看到进度回调被调用
-                        logger.info(f"🔍 [PROGRESS_CALLBACK] 被调用: status={d.get('status')}, filename={d.get('filename', 'N/A')}")
+                        logger.info(
+                            f"🔍 [PROGRESS_CALLBACK] 被调用: status={d.get('status')}, filename={d.get('filename', 'N/A')}")
 
                         if d.get("status") == "downloading":
-                            logger.info(f"🔍 YouTube播放列表进度回调: status={d.get('status')}, filename={d.get('filename', 'N/A')}")
+                            logger.info(
+                                f"🔍 YouTube播放列表进度回调: status={d.get('status')}, filename={d.get('filename', 'N/A')}")
                             # 修正当前视频序号为本播放列表的当前下载视频序号/总数
                             cur_idx = (
                                 d.get("playlist_index")
@@ -6250,7 +6497,8 @@ class VideoDownloader:
                                 progress_text = f"📺 当前视频: {escape_num(cur_idx)}/{escape_num(total_idx)}\n"
                             percent = 0
                             if d.get("filename"):
-                                filename = os.path.basename(d.get("filename", ""))
+                                filename = os.path.basename(
+                                    d.get("filename", ""))
                                 total_bytes = d.get("total_bytes") or d.get(
                                     "total_bytes_estimate", 0
                                 )
@@ -6258,17 +6506,20 @@ class VideoDownloader:
                                 speed_bytes_s = d.get("speed", 0)
                                 eta_seconds = d.get("eta", 0)
                                 if total_bytes and total_bytes > 0:
-                                    downloaded_mb = downloaded_bytes / (1024 * 1024)
+                                    downloaded_mb = downloaded_bytes / \
+                                        (1024 * 1024)
                                     total_mb = total_bytes / (1024 * 1024)
                                     speed_mb_s = (
                                         speed_bytes_s / (1024 * 1024)
                                         if speed_bytes_s
                                         else 0
                                     )
-                                    percent = int(downloaded_bytes * 100 / total_bytes)
+                                    percent = int(
+                                        downloaded_bytes * 100 / total_bytes)
                                     bar = self._make_progress_bar(percent)
                                     try:
-                                        minutes, seconds = divmod(int(eta_seconds), 60)
+                                        minutes, seconds = divmod(
+                                            int(eta_seconds), 60)
                                         eta_str = f"{minutes:02d}:{seconds:02d}"
                                     except (ValueError, TypeError):
                                         eta_str = "未知"
@@ -6307,7 +6558,8 @@ class VideoDownloader:
                             if (abs(percent - last_update["percent"]) >= 5) or (now - last_update["time"] > 1):
                                 if progress_text != last_update["text"]:
                                     # 更新进度消息
-                                    logger.info(f"🔄 更新进度消息: percent={percent}%")
+                                    logger.info(
+                                        f"🔄 更新进度消息: percent={percent}%")
                                 last_update["percent"] = percent
                                 last_update["time"] = now
                                 last_update["text"] = progress_text
@@ -6324,23 +6576,29 @@ class VideoDownloader:
                                         def fix_markdown_v2(text):
                                             # 简化版本：移除了粗体标记，直接转义所有特殊字符
                                             text = text.replace('\\', '')
-                                            special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+                                            special_chars = [
+                                                '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
                                             for char in special_chars:
-                                                text = text.replace(char, f'\\{char}')
+                                                text = text.replace(
+                                                    char, f'\\{char}')
                                             return text
 
-                                        fixed_text = fix_markdown_v2(progress_text)
+                                        fixed_text = fix_markdown_v2(
+                                            progress_text)
                                         future = asyncio.run_coroutine_threadsafe(
-                                            status_message.edit_text(fixed_text, parse_mode=None),
+                                            status_message.edit_text(
+                                                fixed_text, parse_mode=None),
                                             loop
                                         )
                                         future.result(timeout=3.0)
                                         tg_updated = True
                                     except:
                                         try:
-                                            clean_text = progress_text.replace('\\', '')
+                                            clean_text = progress_text.replace(
+                                                '\\', '')
                                             future = asyncio.run_coroutine_threadsafe(
-                                                status_message.edit_text(clean_text),
+                                                status_message.edit_text(
+                                                    clean_text),
                                                 loop
                                             )
                                             future.result(timeout=3.0)
@@ -6371,29 +6629,39 @@ class VideoDownloader:
                                                                     if hasattr(value2, 'run_until_complete'):
                                                                         event_loop = value2
                                                                         # 直接更新 TG 消息
+
                                                                         def fix_markdown_v2(text):
-                                                                            text = text.replace('\\', '')
-                                                                            special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+                                                                            text = text.replace(
+                                                                                '\\', '')
+                                                                            special_chars = [
+                                                                                '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
                                                                             for char in special_chars:
-                                                                                text = text.replace(char, f'\\{char}')
+                                                                                text = text.replace(
+                                                                                    char, f'\\{char}')
                                                                             return text
 
                                                                         try:
-                                                                            fixed_text = fix_markdown_v2(text)
+                                                                            fixed_text = fix_markdown_v2(
+                                                                                text)
                                                                             future = asyncio.run_coroutine_threadsafe(
-                                                                                status_msg.edit_text(fixed_text, parse_mode=None),
+                                                                                status_msg.edit_text(
+                                                                                    fixed_text, parse_mode=None),
                                                                                 event_loop
                                                                             )
-                                                                            future.result(timeout=3.0)
+                                                                            future.result(
+                                                                                timeout=3.0)
                                                                             return True
                                                                         except:
                                                                             # 降级到普通文本
-                                                                            clean_text = text.replace('\\', '')
+                                                                            clean_text = text.replace(
+                                                                                '\\', '')
                                                                             future = asyncio.run_coroutine_threadsafe(
-                                                                                status_msg.edit_text(clean_text),
+                                                                                status_msg.edit_text(
+                                                                                    clean_text),
                                                                                 event_loop
                                                                             )
-                                                                            future.result(timeout=3.0)
+                                                                            future.result(
+                                                                                timeout=3.0)
                                                                             return True
                                                                 except:
                                                                     continue
@@ -6401,15 +6669,18 @@ class VideoDownloader:
                                                         continue
 
                                             # 如果提取失败，调用原函数（但这会失败）
-                                            logger.warning(f"⚠️ 无法从 message_updater 提取 TG 对象，尝试原调用")
+                                            logger.warning(
+                                                f"⚠️ 无法从 message_updater 提取 TG 对象，尝试原调用")
                                             return False
 
                                         # 使用修复的函数
                                         if not fixed_message_updater(progress_text):
-                                            logger.warning(f"⚠️ 修复的 message_updater 失败")
+                                            logger.warning(
+                                                f"⚠️ 修复的 message_updater 失败")
 
                                     except Exception as e:
-                                        logger.error(f"❌ 调用修复的 message_updater 失败: {e}")
+                                        logger.error(
+                                            f"❌ 调用修复的 message_updater 失败: {e}")
 
                                 if not tg_updated and not message_updater:
                                     logger.warning(f"⚠️ 没有可用的消息更新方法")
@@ -6431,11 +6702,14 @@ class VideoDownloader:
                     return progress_callback
 
                 # 下载播放列表
-                logger.info(f"🎬 开始下载播放列表 {i}/{len(playlist_entries)}: {playlist_title}")
-                progress_callback = create_playlist_progress_callback(playlist_progress_data)
+                logger.info(
+                    f"🎬 开始下载播放列表 {i}/{len(playlist_entries)}: {playlist_title}")
+                progress_callback = create_playlist_progress_callback(
+                    playlist_progress_data)
                 logger.info(f"🔧 创建进度回调函数: {type(progress_callback)}")
                 logger.info(f"🔧 进度回调函数是否为None: {progress_callback is None}")
-                logger.info(f"🔧 message_updater是否为None: {message_updater is None}")
+                logger.info(
+                    f"🔧 message_updater是否为None: {message_updater is None}")
                 result = await self._download_youtube_playlist_with_progress(
                     playlist_id,
                     channel_path,
@@ -6483,7 +6757,8 @@ class VideoDownloader:
                                 + list(playlist_path.glob("*.webm"))
                             )
                             video_count = len(video_files)
-                            logger.info(f"📊 通过扫描目录计算播放列表 '{playlist_title}' 的集数: {video_count}")
+                            logger.info(
+                                f"📊 通过扫描目录计算播放列表 '{playlist_title}' 的集数: {video_count}")
 
                     playlist_stats.append(
                         {
@@ -6500,7 +6775,8 @@ class VideoDownloader:
                     )
                     # 更新全局进度
                     global_progress["completed_playlists"] += 1
-                    logger.info(f"    ✅ 播放列表 '{playlist_title}' 下载成功，集数: {video_count}")
+                    logger.info(
+                        f"    ✅ 播放列表 '{playlist_title}' 下载成功，集数: {video_count}")
                 else:
                     error_msg = result.get("error", "未知错误")
                     logger.error(
@@ -6525,7 +6801,8 @@ class VideoDownloader:
 
             # 构建详细的完成统计信息
             total_videos = sum(stat["video_count"] for stat in playlist_stats)
-            total_size_mb = sum(stat["total_size_mb"] for stat in playlist_stats)
+            total_size_mb = sum(stat["total_size_mb"]
+                                for stat in playlist_stats)
 
             # 按先获取下载列表的文件查找逻辑：根据下载列表中的文件名精确查找
             downloaded_files = []
@@ -6581,18 +6858,22 @@ class VideoDownloader:
                                 for i, entry in enumerate(entries, 1):
                                     if entry:
                                         # 构造预期的文件名 - 修复版本
-                                        title = entry.get("title", f"Video_{i}")
+                                        title = entry.get(
+                                            "title", f"Video_{i}")
 
                                         # 更准确的文件名处理，保持与yt-dlp一致
                                         # 1. 只移除真正有问题的后缀模式（不移除｜符号）
-                                        clean_title = re.sub(r'#.*$', '', title)  # 只移除#后的内容
+                                        clean_title = re.sub(
+                                            r'#.*$', '', title)  # 只移除#后的内容
 
                                         # 2. 清理文件系统不支持的特殊字符，但保留｜符号
                                         # yt-dlp通常只清理真正有问题的字符
-                                        safe_title = re.sub(r'[\\/:*?"<>]', "", clean_title)
+                                        safe_title = re.sub(
+                                            r'[\\/:*?"<>]', "", clean_title)
 
                                         # 3. 限制长度（但不要太短，避免截断重要信息）
-                                        safe_title = safe_title.strip()[:80]  # 增加到80字符
+                                        safe_title = safe_title.strip()[
+                                            :80]  # 增加到80字符
 
                                         expected_filename = f"{i:02d}. {safe_title}.mp4"
 
@@ -6618,32 +6899,40 @@ class VideoDownloader:
                                                 f"✅ 找到文件: {expected_filename} ({file_size:.2f}MB)")
                                         else:
                                             # 如果精确匹配失败，尝试智能模糊匹配
-                                            logger.info(f"🔍 精确匹配失败，尝试智能模糊匹配: {expected_filename}")
+                                            logger.info(
+                                                f"🔍 精确匹配失败，尝试智能模糊匹配: {expected_filename}")
 
                                             # 多种匹配策略
                                             found_file = None
 
                                             # 策略1: 按编号匹配（最宽松）
-                                            matching_files = list(playlist_path.glob(f"{i:02d}.*"))
+                                            matching_files = list(
+                                                playlist_path.glob(f"{i:02d}.*"))
                                             if not matching_files:
-                                                matching_files = list(playlist_path.glob(f"{i}.*"))
+                                                matching_files = list(
+                                                    playlist_path.glob(f"{i}.*"))
 
                                             if matching_files:
                                                 found_file = matching_files[0]
-                                                logger.info(f"✅ 通过编号匹配找到文件: {found_file.name}")
+                                                logger.info(
+                                                    f"✅ 通过编号匹配找到文件: {found_file.name}")
                                             else:
                                                 # 策略2: 按标题关键词匹配
                                                 # 提取标题的前几个关键词
-                                                title_words = re.findall(r'[\u4e00-\u9fff]+|[a-zA-Z]+', title)
+                                                title_words = re.findall(
+                                                    r'[\u4e00-\u9fff]+|[a-zA-Z]+', title)
                                                 if title_words and len(title_words) >= 2:
                                                     # 使用前两个关键词搜索
-                                                    keyword1 = title_words[0][:10]  # 限制长度
-                                                    keyword2 = title_words[1][:10] if len(title_words) > 1 else ""
+                                                    # 限制长度
+                                                    keyword1 = title_words[0][:10]
+                                                    keyword2 = title_words[1][:10] if len(
+                                                        title_words) > 1 else ""
 
                                                     for file_path in playlist_path.glob("*.mp4"):
                                                         if keyword1 in file_path.name and (not keyword2 or keyword2 in file_path.name):
                                                             found_file = file_path
-                                                            logger.info(f"✅ 通过关键词匹配找到文件: {found_file.name}")
+                                                            logger.info(
+                                                                f"✅ 通过关键词匹配找到文件: {found_file.name}")
                                                             break
 
                                             if found_file:
@@ -6669,7 +6958,8 @@ class VideoDownloader:
                                                     f"⚠️ 模糊匹配也未找到文件，编号: {i}, 标题: {safe_title}"
                                                 )
                     except Exception as e:
-                        logger.warning(f"⚠️ 获取播放列表信息失败 (ID: {playlist_id}): {e}")
+                        logger.warning(
+                            f"⚠️ 获取播放列表信息失败 (ID: {playlist_id}): {e}")
                         logger.info(f"💡 这通常是因为播放列表已被删除或设为私有，不影响已下载的文件")
                         logger.info(f"🔄 回退到目录扫描模式来统计文件...")
                         # 如果获取列表失败，回退到扫描目录
@@ -6690,15 +6980,19 @@ class VideoDownloader:
                             )
 
             # 计算总文件大小和PART文件统计
-            total_size_mb = sum(stat['total_size_mb'] for stat in playlist_stats)
+            total_size_mb = sum(stat['total_size_mb']
+                                for stat in playlist_stats)
             total_size_gb = total_size_mb / 1024
 
             # 计算总的成功和未完成文件数量
-            total_success_count = sum(stat.get('success_count', stat.get('video_count', 0)) for stat in playlist_stats)
-            total_part_count = sum(stat.get('part_count', 0) for stat in playlist_stats)
+            total_success_count = sum(stat.get('success_count', stat.get(
+                'video_count', 0)) for stat in playlist_stats)
+            total_part_count = sum(stat.get('part_count', 0)
+                                   for stat in playlist_stats)
 
             # 计算总计数量和失败数量
-            total_video_count = sum(stat.get('video_count', 0) for stat in playlist_stats)
+            total_video_count = sum(stat.get('video_count', 0)
+                                    for stat in playlist_stats)
             total_failed_count = total_video_count - total_success_count
 
             # 格式化总大小显示 - 只显示一个单位
@@ -6753,13 +7047,13 @@ class VideoDownloader:
                 "success": True,
                 "is_channel": True,
                 "channel_title": channel_name,
-                    "download_path": str(channel_path),
-                    "playlists_downloaded": downloaded_playlists,
-                    "playlist_stats": playlist_stats,
-                    "total_videos": total_videos,
-                    "total_size_mb": total_size_mb,
-                    "downloaded_files": downloaded_files,
-                }
+                "download_path": str(channel_path),
+                "playlists_downloaded": downloaded_playlists,
+                "playlist_stats": playlist_stats,
+                "total_videos": total_videos,
+                "total_size_mb": total_size_mb,
+                "downloaded_files": downloaded_files,
+            }
 
         except Exception as e:
             logger.error(f"❌ YouTube频道播放列表下载失败: {e}")
@@ -6811,7 +7105,8 @@ class VideoDownloader:
                 # 获取列表标题
                 try:
                     list_info = self.get_bilibili_list_info(uid, list_id)
-                    playlist_title = list_info.get("title", f"BilibiliList-{list_id}")
+                    playlist_title = list_info.get(
+                        "title", f"BilibiliList-{list_id}")
                 except BaseException:
                     playlist_title = f"BilibiliList-{list_id}"
                 safe_playlist_title = re.sub(
@@ -6828,7 +7123,8 @@ class VideoDownloader:
                     safe_title = re.sub(r'[\\/:*?"<>|]', "", title)[:60]
                     # 使用绝对路径构建输出模板
                     outtmpl = str(
-                        final_download_path / f"{idx:02d}. {safe_title}.%(ext)s"
+                        final_download_path /
+                        f"{idx:02d}. {safe_title}.%(ext)s"
                     )
 
                     # 更新下载进度显示
@@ -6848,19 +7144,23 @@ class VideoDownloader:
                     ]
 
                     try:
-                        print_result = subprocess.run(cmd_print, capture_output=True, text=True, cwd=str(final_download_path))
+                        print_result = subprocess.run(
+                            cmd_print, capture_output=True, text=True, cwd=str(final_download_path))
                         if print_result.returncode == 0:
                             full_expected_path = print_result.stdout.strip()
                             # 只保留文件名部分，不包含路径
-                            expected_filename = os.path.basename(full_expected_path)
+                            expected_filename = os.path.basename(
+                                full_expected_path)
                             logger.info(f"📝 预期文件名: {expected_filename}")
                         else:
                             # 如果print失败，使用构造的文件名
                             expected_filename = f"{idx:02d}. {safe_title}.mp4"
-                            logger.warning(f"⚠️ print文件名失败，使用构造文件名: {expected_filename}")
+                            logger.warning(
+                                f"⚠️ print文件名失败，使用构造文件名: {expected_filename}")
                     except Exception as e:
                         expected_filename = f"{idx:02d}. {safe_title}.mp4"
-                        logger.warning(f"⚠️ print文件名异常: {e}，使用构造文件名: {expected_filename}")
+                        logger.warning(
+                            f"⚠️ print文件名异常: {e}，使用构造文件名: {expected_filename}")
 
                     # 2. 执行下载（使用yt-dlp Python API支持进度回调）
                     # 创建安全的进度回调函数，避免 'NoneType' object is not callable 错误
@@ -6871,7 +7171,8 @@ class VideoDownloader:
                                     # 异步函数处理
                                     try:
                                         loop = asyncio.get_running_loop()
-                                        asyncio.run_coroutine_threadsafe(progress_callback(d), loop)
+                                        asyncio.run_coroutine_threadsafe(
+                                            progress_callback(d), loop)
                                     except RuntimeError:
                                         logger.warning("没有运行的事件循环，跳过异步进度回调")
                                 else:
@@ -6880,7 +7181,7 @@ class VideoDownloader:
                             # 如果progress_callback为None或不可调用，静默忽略
                         except Exception as e:
                             logger.error(f"B站下载进度回调错误: {e}")
-                    
+
                     ydl_opts_single = {
                         'outtmpl': outtmpl,
                         'merge_output_format': 'mp4',
@@ -6910,15 +7211,18 @@ class VideoDownloader:
                         # 3. 根据预期文件名查找实际文件
                         expected_path = final_download_path / expected_filename
                         if expected_path.exists():
-                            size_mb = os.path.getsize(expected_path) / (1024 * 1024)
-                            media_info = self.get_media_info(str(expected_path))
+                            size_mb = os.path.getsize(
+                                expected_path) / (1024 * 1024)
+                            media_info = self.get_media_info(
+                                str(expected_path))
                             downloaded_files.append({
                                 'filename': expected_filename,
                                 'size_mb': size_mb,
                                 'resolution': media_info.get('resolution', '未知'),
                                 'abr': media_info.get('bit_rate')
                             })
-                            logger.info(f"📁 记录文件: {expected_filename} ({size_mb:.1f}MB)")
+                            logger.info(
+                                f"📁 记录文件: {expected_filename} ({size_mb:.1f}MB)")
                         else:
                             logger.warning(f"⚠️ 预期文件不存在: {expected_filename}")
                     except Exception as e:
@@ -6930,14 +7234,20 @@ class VideoDownloader:
 
                 if success_count > 0:
                     # 使用已记录的文件信息（不遍历目录）
-                    total_size_mb = sum(file_info['size_mb'] for file_info in downloaded_files)
-                    all_resolutions = {file_info['resolution'] for file_info in downloaded_files if file_info['resolution'] != '未知'}
+                    total_size_mb = sum(file_info['size_mb']
+                                        for file_info in downloaded_files)
+                    all_resolutions = {
+                        file_info['resolution'] for file_info in downloaded_files if file_info['resolution'] != '未知'}
 
-                    filename_list = [info['filename'] for info in downloaded_files]
-                    filename_display = '\n'.join([f"  {i+1:02d}. {name}" for i, name in enumerate(filename_list)])
-                    resolution_display = ', '.join(sorted(all_resolutions)) if all_resolutions else '未知'
+                    filename_list = [info['filename']
+                                     for info in downloaded_files]
+                    filename_display = '\n'.join(
+                        [f"  {i+1:02d}. {name}" for i, name in enumerate(filename_list)])
+                    resolution_display = ', '.join(
+                        sorted(all_resolutions)) if all_resolutions else '未知'
 
-                    logger.info(f"📊 用户列表下载统计: {len(downloaded_files)}个文件, 总大小{total_size_mb:.1f}MB")
+                    logger.info(
+                        f"📊 用户列表下载统计: {len(downloaded_files)}个文件, 总大小{total_size_mb:.1f}MB")
 
                     return {
                         "status": "success",
@@ -7030,8 +7340,10 @@ class VideoDownloader:
                 anthology_detected = False
                 try:
                     # 捕获yt-dlp的输出来检测anthology
-                    cmd_simulate = ['yt-dlp', '--simulate', '--verbose', original_url]
-                    result = subprocess.run(cmd_simulate, capture_output=True, text=True)
+                    cmd_simulate = ['yt-dlp', '--simulate',
+                                    '--verbose', original_url]
+                    result = subprocess.run(
+                        cmd_simulate, capture_output=True, text=True)
                     output = result.stdout + result.stderr
 
                     if 'extracting videos in anthology' in output.lower():
@@ -7061,9 +7373,11 @@ class VideoDownloader:
 
                     try:
                         with yt_dlp.YoutubeDL(force_check_opts) as ydl:
-                            force_info = ydl.extract_info(original_url, download=False)
+                            force_info = ydl.extract_info(
+                                original_url, download=False)
                         force_entries = force_info.get("entries", [])
-                        force_count = len(force_entries) if force_entries else 1
+                        force_count = len(
+                            force_entries) if force_entries else 1
 
                         if force_count > count:
                             logger.info(f"🔄 强制检测成功！检测到 {force_count} 个视频")
@@ -7077,7 +7391,8 @@ class VideoDownloader:
                             if count <= 1:
                                 logger.info("🔍 anthology检测到，但实际只有1集，按单集处理")
                             else:
-                                logger.info(f"🔍 anthology检测到，确认有{count}集，按合集处理")
+                                logger.info(
+                                    f"🔍 anthology检测到，确认有{count}集，按合集处理")
                     except Exception as e:
                         logger.warning(f"⚠️ 强制检测失败: {e}")
                         if anthology_detected:
@@ -7085,11 +7400,14 @@ class VideoDownloader:
                             logger.info("🔄 anthology检测成功，但强制检测失败，按实际检测结果处理")
                             # 不强制设置count，保持原有的检测结果
                             if count <= 1:
-                                logger.info("🔍 anthology检测到但强制检测失败，且实际只有1集，按单集处理")
+                                logger.info(
+                                    "🔍 anthology检测到但强制检测失败，且实际只有1集，按单集处理")
                             else:
-                                logger.info(f"🔍 anthology检测到，实际有{count}集，按合集处理")
+                                logger.info(
+                                    f"🔍 anthology检测到，实际有{count}集，按合集处理")
             playlist_title = info.get("title", "Unknown Playlist")
-            safe_playlist_title = re.sub(r'[\\/:*?"<>|]', "_", playlist_title).strip()
+            safe_playlist_title = re.sub(
+                r'[\\/:*?"<>|]', "_", playlist_title).strip()
 
             if count > 1 and auto_playlist:
                 final_download_path = Path(download_path) / safe_playlist_title
@@ -7129,7 +7447,8 @@ class VideoDownloader:
                         if entry:
                             video_title = entry.get("title", "unknown")
                             video_id = entry.get("id", "unknown")
-                            logger.info(f"  {i:02d}. {video_title} (ID: {video_id})")
+                            logger.info(
+                                f"  {i:02d}. {video_title} (ID: {video_id})")
 
             # 根据视频类型决定下载策略
             if video_type == "single":
@@ -7176,7 +7495,8 @@ class VideoDownloader:
                     logger.info("🔄 自动下载全集模式：将下载所有分P视频")
                 else:
                     # 只下载当前分P
-                    output_template = str(final_download_path / "%(title)s.%(ext)s")
+                    output_template = str(
+                        final_download_path / "%(title)s.%(ext)s")
                     # 添加明显的outtmpl日志
                     logger.info(
                         f"🔧 [BILIBILI_SINGLE_EPISODE] outtmpl 绝对路径: {output_template}"
@@ -7188,7 +7508,8 @@ class VideoDownloader:
                         "noplaylist": True,
                         "progress_hooks": [
                             lambda d: (
-                                progress_callback(d) if progress_callback else None
+                                progress_callback(
+                                    d) if progress_callback else None
                             )
                         ],
                         # 🎯 B站4K支持：使用多策略格式选择，优先4K，回退到会员/非会员可用格式
@@ -7202,9 +7523,11 @@ class VideoDownloader:
 
                 # 使用和多P下载完全相同的逻辑，B站不使用ID标签
                 output_template = str(
-                    final_download_path / "%(playlist_index)s. %(title)s.%(ext)s"
+                    final_download_path /
+                    "%(playlist_index)s. %(title)s.%(ext)s"
                 )
-                logger.info(f"🔧 [BILIBILI_PLAYLIST] outtmpl 绝对路径: {output_template}")
+                logger.info(
+                    f"🔧 [BILIBILI_PLAYLIST] outtmpl 绝对路径: {output_template}")
 
                 # 使用增强版进度回调来生成详细的进度显示格式
                 progress_data = {
@@ -7220,7 +7543,8 @@ class VideoDownloader:
                     progress_hook = progress_callback(progress_data)
                 else:
                     # 否则使用标准的 single_video_progress_hook
-                    progress_hook = single_video_progress_hook(message_updater=progress_callback, progress_data=progress_data, status_message=status_message, context=context)
+                    progress_hook = single_video_progress_hook(
+                        message_updater=progress_callback, progress_data=progress_data, status_message=status_message, context=context)
 
                 ydl_opts = {
                     "outtmpl": output_template,
@@ -7336,7 +7660,8 @@ class VideoDownloader:
             }
 
             logger.info(f"🔍 获取B站列表API: {api_url}")
-            response = requests.get(api_url, params=params, headers=headers, timeout=10, verify=False)
+            response = requests.get(
+                api_url, params=params, headers=headers, timeout=10, verify=False)
             response.raise_for_status()
 
             data = response.json()
@@ -7481,7 +7806,8 @@ class VideoDownloader:
             logger.info(f"📋 合集标题: {season_title}")
 
             # 创建合集专用子目录
-            safe_season_title = self._sanitize_filename(season_title, max_length=50)
+            safe_season_title = self._sanitize_filename(
+                season_title, max_length=50)
             season_download_path = download_path / safe_season_title
             season_download_path.mkdir(parents=True, exist_ok=True)
             logger.info(f"📁 创建合集目录: {season_download_path}")
@@ -7532,19 +7858,24 @@ class VideoDownloader:
                             filename = d.get('filename', video_title)
 
                             if total_bytes and total_bytes > 0:
-                                percent = (downloaded_bytes / total_bytes) * 100
-                                downloaded_mb = downloaded_bytes / (1024 * 1024)
+                                percent = (downloaded_bytes /
+                                           total_bytes) * 100
+                                downloaded_mb = downloaded_bytes / \
+                                    (1024 * 1024)
                                 total_mb = total_bytes / (1024 * 1024)
-                                speed_mb = speed / (1024 * 1024) if speed else 0
+                                speed_mb = speed / \
+                                    (1024 * 1024) if speed else 0
 
                                 # 创建进度条 (20个字符)
                                 progress_bar_length = 20
                                 # 修复进度条计算：确保至少显示1个实心块当进度>0时
                                 if percent > 0:
-                                    filled_length = max(1, int(progress_bar_length * percent / 100))
+                                    filled_length = max(
+                                        1, int(progress_bar_length * percent / 100))
                                 else:
                                     filled_length = 0
-                                bar = '█' * filled_length + '░' * (progress_bar_length - filled_length)
+                                bar = '█' * filled_length + '░' * \
+                                    (progress_bar_length - filled_length)
 
                                 # 格式化ETA
                                 if eta and eta > 0:
@@ -7577,7 +7908,8 @@ class VideoDownloader:
                                             # 对于协程函数，需要在事件循环中运行
                                             try:
                                                 loop = asyncio.get_running_loop()
-                                                asyncio.run_coroutine_threadsafe(message_updater(progress_msg), loop)
+                                                asyncio.run_coroutine_threadsafe(
+                                                    message_updater(progress_msg), loop)
                                             except RuntimeError:
                                                 pass  # 如果没有运行的事件循环，跳过
                                         else:
@@ -7588,7 +7920,8 @@ class VideoDownloader:
                         elif d.get('status') == 'finished':
                             filename = d.get('filename', '')
                             if filename:
-                                logger.info(f"✅ [{video_index}/{total_count}] 下载完成: {filename}")
+                                logger.info(
+                                    f"✅ [{video_index}/{total_count}] 下载完成: {filename}")
 
                                 # 显示完成消息
                                 complete_msg = (
@@ -7602,7 +7935,8 @@ class VideoDownloader:
                                         if asyncio.iscoroutinefunction(message_updater):
                                             try:
                                                 loop = asyncio.get_running_loop()
-                                                asyncio.run_coroutine_threadsafe(message_updater(complete_msg), loop)
+                                                asyncio.run_coroutine_threadsafe(
+                                                    message_updater(complete_msg), loop)
                                             except RuntimeError:
                                                 pass
                                         else:
@@ -7643,7 +7977,8 @@ class VideoDownloader:
 
                     # 使用标准的single_video_progress_hook，但添加UGC合集信息
                     import threading
-                    progress_data = {"final_filename": None, "lock": threading.Lock()}
+                    progress_data = {"final_filename": None,
+                                     "lock": threading.Lock()}
 
                     # 创建UGC专用的消息更新器，在标准进度消息前添加合集信息
                     def ugc_message_updater(msg_or_dict):
@@ -7706,13 +8041,15 @@ class VideoDownloader:
 
                         # 尝试从下载目录中找到实际的文件名
                         actual_filename = None
-                        logger.info(f"🔍 查找第{i}个视频的实际文件名，目录: {season_download_path}")
+                        logger.info(
+                            f"🔍 查找第{i}个视频的实际文件名，目录: {season_download_path}")
                         try:
                             import os
                             all_files = os.listdir(season_download_path)
                             logger.info(f"📁 目录中的所有文件: {all_files}")
 
-                            video_files = [f for f in all_files if f.endswith(('.mp4', '.mkv', '.avi', '.flv', '.webm'))]
+                            video_files = [f for f in all_files if f.endswith(
+                                ('.mp4', '.mkv', '.avi', '.flv', '.webm'))]
                             logger.info(f"🎬 视频文件: {video_files}")
 
                             for file in video_files:
@@ -7725,7 +8062,8 @@ class VideoDownloader:
                             # 如果没找到匹配的文件，使用最新的视频文件
                             if not actual_filename and video_files:
                                 # 按修改时间排序，取最新的
-                                video_files.sort(key=lambda x: os.path.getmtime(season_download_path / x), reverse=True)
+                                video_files.sort(key=lambda x: os.path.getmtime(
+                                    season_download_path / x), reverse=True)
                                 actual_filename = video_files[0]
                                 logger.info(f"📊 使用最新文件: {actual_filename}")
                         except Exception as e:
@@ -7733,7 +8071,8 @@ class VideoDownloader:
 
                         if not actual_filename:
                             actual_filename = f"{video['title']}.mp4"
-                            logger.warning(f"⚠️ 未找到实际文件，使用默认名称: {actual_filename}")
+                            logger.warning(
+                                f"⚠️ 未找到实际文件，使用默认名称: {actual_filename}")
 
                         # 获取文件大小
                         file_size_mb = 0
@@ -7751,10 +8090,13 @@ class VideoDownloader:
                             file_path = season_download_path / actual_filename
                             if file_path.exists():
                                 # 使用现有的get_media_info方法检测视频信息
-                                media_info = self.get_media_info(str(file_path))
-                                resolution_info = media_info.get('resolution', '')
+                                media_info = self.get_media_info(
+                                    str(file_path))
+                                resolution_info = media_info.get(
+                                    'resolution', '')
                                 duration_info = media_info.get('duration', '')
-                                logger.info(f"🔍 检测到视频信息: 分辨率={resolution_info}, 时长={duration_info}")
+                                logger.info(
+                                    f"🔍 检测到视频信息: 分辨率={resolution_info}, 时长={duration_info}")
                         except Exception as e:
                             logger.debug(f"检测视频信息失败: {e}")
 
@@ -7845,7 +8187,8 @@ class VideoDownloader:
 
                 # 获取分辨率信息 - 使用ffprobe检测实际文件
                 resolution_display = "未知"
-                logger.info(f"🔍 开始分辨率检测，下载文件数量: {len(downloaded_files) if downloaded_files else 0}")
+                logger.info(
+                    f"🔍 开始分辨率检测，下载文件数量: {len(downloaded_files) if downloaded_files else 0}")
                 logger.info(f"🔍 初始resolution_display值: '{resolution_display}'")
 
                 if downloaded_files:
@@ -7859,14 +8202,16 @@ class VideoDownloader:
                     if file_path and os.path.exists(file_path):
                         logger.info(f"✅ 文件存在，开始检测分辨率")
                         try:
-                            logger.info(f"🔍 使用get_media_info检测分辨率: {file_path}")
+                            logger.info(
+                                f"🔍 使用get_media_info检测分辨率: {file_path}")
 
                             # 使用现有的get_media_info方法
                             media_info = self.get_media_info(file_path)
                             if media_info.get('resolution'):
                                 resolution_display = media_info['resolution']
                                 logger.info(f"✅ 成功获取分辨率: {resolution_display}")
-                                logger.info(f"🔍 resolution_display变量当前值: '{resolution_display}'")
+                                logger.info(
+                                    f"🔍 resolution_display变量当前值: '{resolution_display}'")
                             else:
                                 logger.warning("⚠️ 无法获取分辨率信息")
 
@@ -7894,10 +8239,12 @@ class VideoDownloader:
                 if failed_videos:
                     logger.info(f"  ❌ 失败: {len(failed_videos)} 个视频")
                     for failed in failed_videos:
-                        logger.warning(f"    - 第{failed['index']}个: {failed['title']} (错误: {failed['error']})")
+                        logger.warning(
+                            f"    - 第{failed['index']}个: {failed['title']} (错误: {failed['error']})")
 
                 # 生成美化的最终状态消息
-                logger.info(f"🔍 开始生成最终消息，当前resolution_display值: '{resolution_display}'")
+                logger.info(
+                    f"🔍 开始生成最终消息，当前resolution_display值: '{resolution_display}'")
                 final_msg = f"🎬 视频下载完成\n\n"
                 final_msg += f"📝 文件名:\n"
 
@@ -7912,7 +8259,8 @@ class VideoDownloader:
                 final_msg += f"✅ 成功: {success_count} 个\n"
 
                 # 添加分辨率信息到最终消息
-                logger.info(f"🔍 添加分辨率到消息，resolution_display值: '{resolution_display}'")
+                logger.info(
+                    f"🔍 添加分辨率到消息，resolution_display值: '{resolution_display}'")
                 final_msg += f"🖼️ 分辨率: {resolution_display}\n"
                 final_msg += f"📂 保存位置: {season_download_path}"
 
@@ -7952,7 +8300,8 @@ class VideoDownloader:
                 logger.error(error_msg)
                 logger.error("失败详情:")
                 for failed in failed_videos:
-                    logger.error(f"  - 第{failed['index']}个: {failed['title']} (错误: {failed['error']})")
+                    logger.error(
+                        f"  - 第{failed['index']}个: {failed['title']} (错误: {failed['error']})")
 
                 if message_updater:
                     try:
@@ -7988,7 +8337,8 @@ class VideoDownloader:
         import os
 
         logger.info(f"🎬 开始下载B站UP主的所有视频: UID={uid}")
-        logger.info(f"🔍 message_updater参数: type={type(message_updater)}, callable={callable(message_updater)}")
+        logger.info(
+            f"🔍 message_updater参数: type={type(message_updater)}, callable={callable(message_updater)}")
 
         try:
             # 步骤1: 使用yt-dlp获取UP主的视频列表
@@ -8090,7 +8440,8 @@ class VideoDownloader:
                         channel_url = f"https://space.bilibili.com/{uid}/channel/series"
                         logger.info(f"🔍 方式3: 尝试频道系列页面 {channel_url}")
                         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                            info = ydl.extract_info(channel_url, download=False)
+                            info = ydl.extract_info(
+                                channel_url, download=False)
                         logger.info("✅ 方式3成功")
                     except Exception as e3:
                         last_error = str(e3)
@@ -8113,7 +8464,8 @@ class VideoDownloader:
                                 limited_opts["cookiefile"] = self.b_cookies_path
 
                             with yt_dlp.YoutubeDL(limited_opts) as ydl:
-                                info = ydl.extract_info(user_space_url, download=False)
+                                info = ydl.extract_info(
+                                    user_space_url, download=False)
                             logger.info("✅ 方式4成功（宽松配置）")
                         except Exception as e4:
                             last_error = str(e4)
@@ -8133,7 +8485,8 @@ class VideoDownloader:
                                     simple_opts["cookiefile"] = self.b_cookies_path
 
                                 with yt_dlp.YoutubeDL(simple_opts) as ydl:
-                                    info = ydl.extract_info(user_space_url, download=False)
+                                    info = ydl.extract_info(
+                                        user_space_url, download=False)
                                 logger.info("✅ 方式5成功（最简模式，获取所有视频）")
                             except Exception as e5:
                                 last_error = str(e5)
@@ -8153,7 +8506,8 @@ class VideoDownloader:
                                         paginated_opts["cookiefile"] = self.b_cookies_path
 
                                     with yt_dlp.YoutubeDL(paginated_opts) as ydl:
-                                        info = ydl.extract_info(user_space_url, download=False)
+                                        info = ydl.extract_info(
+                                            user_space_url, download=False)
                                     logger.info("✅ 方式6成功（分页模式）")
                                 except Exception as e6:
                                     last_error = str(e6)
@@ -8183,9 +8537,11 @@ class VideoDownloader:
             logger.info(f"📊 找到 {len(entries)} 个视频")
 
             # 检查是否获取完整
-            total_count = info.get('playlist_count') or info.get('_total_count') or len(entries)
+            total_count = info.get('playlist_count') or info.get(
+                '_total_count') or len(entries)
             if total_count and total_count > len(entries):
-                logger.warning(f"⚠️ 可能未获取完整视频列表: 获取到 {len(entries)} 个，预期 {total_count} 个")
+                logger.warning(
+                    f"⚠️ 可能未获取完整视频列表: 获取到 {len(entries)} 个，预期 {total_count} 个")
             else:
                 logger.info(f"✅ 成功获取完整视频列表: {len(entries)} 个视频")
 
@@ -8198,7 +8554,8 @@ class VideoDownloader:
 
             # 步骤2: 创建UP主专用下载目录（参考YouTube频道模式）
             # 清理UP主名称，移除文件系统不支持的字符
-            clean_uploader_name = re.sub(r'[\\/:*?"<>|]', "_", uploader_name).strip()
+            clean_uploader_name = re.sub(
+                r'[\\/:*?"<>|]', "_", uploader_name).strip()
             user_download_path = download_path / clean_uploader_name
             user_download_path.mkdir(parents=True, exist_ok=True)
             logger.info(f"📁 UP主目录: {user_download_path}")
@@ -8284,8 +8641,10 @@ class VideoDownloader:
                         if match:
                             episode_num = match.group(1)
                             # 提取合集名称（去掉集数部分）
-                            clean_title = re.sub(pattern, '', video_title).strip()
-                            clean_title = re.sub(r'[【】\[\]\(\)（）]', '', clean_title).strip()
+                            clean_title = re.sub(
+                                pattern, '', video_title).strip()
+                            clean_title = re.sub(
+                                r'[【】\[\]\(\)（）]', '', clean_title).strip()
 
                             if clean_title:
                                 # 使用清理后的标题作为合集名
@@ -8318,7 +8677,8 @@ class VideoDownloader:
                 else:
                     single_videos.append(entry)
 
-            logger.info(f"📊 简单分组结果: {len(playlists)} 个播放列表, {len(single_videos)} 个单独视频")
+            logger.info(
+                f"📊 简单分组结果: {len(playlists)} 个播放列表, {len(single_videos)} 个单独视频")
 
             # 显示预期的目录结构
             logger.info("📁 预期目录结构:")
@@ -8359,7 +8719,8 @@ class VideoDownloader:
                         except Exception as e:
                             logger.warning(f"更新状态消息失败: {e}")
 
-                    logger.info(f"🎬 开始处理播放列表: {playlist_name} ({len(videos)} 个视频)")
+                    logger.info(
+                        f"🎬 开始处理播放列表: {playlist_name} ({len(videos)} 个视频)")
 
                     # 为播放列表中的每个视频调用现有的下载方法
                     playlist_downloaded = 0
@@ -8371,19 +8732,24 @@ class VideoDownloader:
                     logger.info(f"📁 创建播放列表目录: {playlist_path}")
 
                     for video_idx, video in enumerate(videos, 1):
-                        video_url = video.get('url') or video.get('webpage_url')
+                        video_url = video.get(
+                            'url') or video.get('webpage_url')
                         video_title = video.get('title', '')
 
                         if video_url:
                             try:
-                                logger.info(f"🎬 调用现有下载方法处理视频 {video_idx}/{len(videos)}: {video_url}")
-                                logger.info(f"🔍 传递给download_video的message_updater: {type(message_updater)}, callable: {callable(message_updater)}")
+                                logger.info(
+                                    f"🎬 调用现有下载方法处理视频 {video_idx}/{len(videos)}: {video_url}")
+                                logger.info(
+                                    f"🔍 传递给download_video的message_updater: {type(message_updater)}, callable: {callable(message_updater)}")
 
                                 # 生成更好的文件名
-                                clean_title = re.sub(r'[\\/:*?"<>|]', "_", video_title).strip()
+                                clean_title = re.sub(
+                                    r'[\\/:*?"<>|]', "_", video_title).strip()
                                 if playlist_type == "multipart":
                                     # 多P视频使用集数命名
-                                    episode_match = re.search(r'p=(\d+)', video_url)
+                                    episode_match = re.search(
+                                        r'p=(\d+)', video_url)
                                     if episode_match:
                                         episode_num = episode_match.group(1)
                                         filename = f"{episode_num:02d}. {clean_title}.mp4"
@@ -8413,27 +8779,29 @@ class VideoDownloader:
 
                                 logger.info(f"📝 生成文件名: {filename}")
 
-
-
                                 # 临时修改下载路径到播放列表目录
                                 original_bilibili_path = self.bilibili_download_path
                                 self.bilibili_download_path = playlist_path
-                                logger.info(f"🔧 临时修改B站下载路径: {self.bilibili_download_path}")
+                                logger.info(
+                                    f"🔧 临时修改B站下载路径: {self.bilibili_download_path}")
 
                                 try:
                                     # 创建同步进度更新器，兼容yt-dlp的进度回调
                                     def progress_updater(progress_text):
-                                        logger.info(f"🔍 播放列表进度更新器被调用: type={type(progress_text)}")
+                                        logger.info(
+                                            f"🔍 播放列表进度更新器被调用: type={type(progress_text)}")
 
                                         if isinstance(progress_text, str):
                                             # 如果是字符串，直接显示
-                                            logger.info(f"🔍 收到字符串消息: {progress_text[:100]}...")
+                                            logger.info(
+                                                f"🔍 收到字符串消息: {progress_text[:100]}...")
                                             # 对于字符串消息，我们暂时跳过，因为异步调用复杂
                                             logger.info(f"⚠️ 跳过字符串消息的异步调用")
                                         else:
                                             # 如果是字典（yt-dlp进度数据），转换为格式化消息
                                             d = progress_text
-                                            logger.info(f"🔍 收到进度字典: status={d.get('status')}, filename={d.get('filename', 'N/A')}")
+                                            logger.info(
+                                                f"🔍 收到进度字典: status={d.get('status')}, filename={d.get('filename', 'N/A')}")
 
                                             if d.get("status") == "downloading":
                                                 # 控制更新频率
@@ -8446,29 +8814,40 @@ class VideoDownloader:
                                                     return
                                                 progress_updater.last_update = current_time
                                                 # 获取进度信息
-                                                filename = d.get("filename", "未知文件")
+                                                filename = d.get(
+                                                    "filename", "未知文件")
                                                 if filename:
-                                                    filename = os.path.basename(filename)
+                                                    filename = os.path.basename(
+                                                        filename)
 
                                                 # 调试：打印所有可用的字段
-                                                logger.info(f"🔍 播放列表进度字典所有字段: {list(d.keys())}")
-                                                logger.info(f"🔍 播放列表进度字典内容: {d}")
+                                                logger.info(
+                                                    f"🔍 播放列表进度字典所有字段: {list(d.keys())}")
+                                                logger.info(
+                                                    f"🔍 播放列表进度字典内容: {d}")
 
-                                                downloaded_bytes = d.get("downloaded_bytes", 0)
-                                                total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
+                                                downloaded_bytes = d.get(
+                                                    "downloaded_bytes", 0)
+                                                total_bytes = d.get("total_bytes") or d.get(
+                                                    "total_bytes_estimate", 0)
                                                 speed = d.get("speed", 0)
 
                                                 # 调试：打印原始数值
-                                                logger.info(f"🔍 播放列表原始数值: downloaded_bytes={downloaded_bytes}, total_bytes={total_bytes}, speed={speed}")
+                                                logger.info(
+                                                    f"🔍 播放列表原始数值: downloaded_bytes={downloaded_bytes}, total_bytes={total_bytes}, speed={speed}")
 
                                                 # 格式化大小和速度
-                                                downloaded_mb = downloaded_bytes / (1024 * 1024) if downloaded_bytes else 0
-                                                total_mb = total_bytes / (1024 * 1024) if total_bytes else 0
-                                                speed_mb = speed / (1024 * 1024) if speed else 0
+                                                downloaded_mb = downloaded_bytes / \
+                                                    (1024 * 1024) if downloaded_bytes else 0
+                                                total_mb = total_bytes / \
+                                                    (1024 * 1024) if total_bytes else 0
+                                                speed_mb = speed / \
+                                                    (1024 * 1024) if speed else 0
 
                                                 # 计算进度
                                                 if total_bytes > 0:
-                                                    progress_percent = (downloaded_bytes / total_bytes) * 100
+                                                    progress_percent = (
+                                                        downloaded_bytes / total_bytes) * 100
                                                 else:
                                                     progress_percent = 0
 
@@ -8483,8 +8862,10 @@ class VideoDownloader:
 
                                                 # 创建进度条
                                                 bar_length = 20
-                                                filled_length = int(bar_length * progress_percent / 100)
-                                                bar = '█' * filled_length + '░' * (bar_length - filled_length)
+                                                filled_length = int(
+                                                    bar_length * progress_percent / 100)
+                                                bar = '█' * filled_length + '░' * \
+                                                    (bar_length - filled_length)
 
                                                 # 构建详细的进度消息
                                                 progress_text = f"""📥 正在下载第{playlist_index}/{len(playlists)}个播放列表：{playlist_name}
@@ -8504,62 +8885,83 @@ class VideoDownloader:
 
                                                         # 直接调用同步的message_updater（update_progress），线程安全地编辑TG消息
                                                         try:
-                                                            message_updater(progress_text)
-                                                            logger.info(f"✅ 播放列表进度消息发送成功")
+                                                            message_updater(
+                                                                progress_text)
+                                                            logger.info(
+                                                                f"✅ 播放列表进度消息发送成功")
                                                         except Exception as e:
-                                                            logger.warning(f"发送播放列表进度消息失败: {e}")
+                                                            logger.warning(
+                                                                f"发送播放列表进度消息失败: {e}")
 
                                                     except Exception as e:
-                                                        logger.warning(f"创建播放列表进度消息线程失败: {e}")
+                                                        logger.warning(
+                                                            f"创建播放列表进度消息线程失败: {e}")
 
                                     # 创建简化的进度更新器
                                     async def simple_progress_updater(progress_text):
                                         try:
-                                            logger.info(f"🔍 [DEBUG] 播放列表simple_progress_updater被调用: type={type(progress_text)}")
-                                            logger.info(f"🔍 [DEBUG] 播放列表message_updater状态: {message_updater}, type={type(message_updater)}")
+                                            logger.info(
+                                                f"🔍 [DEBUG] 播放列表simple_progress_updater被调用: type={type(progress_text)}")
+                                            logger.info(
+                                                f"🔍 [DEBUG] 播放列表message_updater状态: {message_updater}, type={type(message_updater)}")
 
                                             if isinstance(progress_text, str):
                                                 # 字符串消息直接发送
                                                 if message_updater and callable(message_updater):
-                                                    logger.info(f"🔍 [DEBUG] 播放列表准备调用message_updater")
+                                                    logger.info(
+                                                        f"🔍 [DEBUG] 播放列表准备调用message_updater")
                                                     # message_updater是同步函数，直接调用
-                                                    message_updater(progress_text)
-                                                    logger.info(f"✅ [DEBUG] 播放列表message_updater调用成功")
+                                                    message_updater(
+                                                        progress_text)
+                                                    logger.info(
+                                                        f"✅ [DEBUG] 播放列表message_updater调用成功")
                                                 else:
-                                                    logger.warning(f"⚠️ [DEBUG] 播放列表message_updater不可用: {message_updater}")
+                                                    logger.warning(
+                                                        f"⚠️ [DEBUG] 播放列表message_updater不可用: {message_updater}")
                                             else:
                                                 # 字典数据处理，转换为进度消息
-                                                logger.info(f"🔍 [DEBUG] 播放列表处理字典数据: {progress_text}")
+                                                logger.info(
+                                                    f"🔍 [DEBUG] 播放列表处理字典数据: {progress_text}")
 
                                                 if isinstance(progress_text, dict) and progress_text.get("status") == "downloading":
                                                     d = progress_text
 
                                                     # 获取进度信息
-                                                    filename = d.get("filename", "未知文件")
+                                                    filename = d.get(
+                                                        "filename", "未知文件")
                                                     if filename:
-                                                        filename = os.path.basename(filename)
+                                                        filename = os.path.basename(
+                                                            filename)
 
-                                                    downloaded_bytes = d.get("downloaded_bytes", 0)
-                                                    total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
+                                                    downloaded_bytes = d.get(
+                                                        "downloaded_bytes", 0)
+                                                    total_bytes = d.get("total_bytes") or d.get(
+                                                        "total_bytes_estimate", 0)
                                                     speed = d.get("speed", 0)
 
                                                     # 格式化大小和速度
-                                                    downloaded_mb = downloaded_bytes / (1024 * 1024) if downloaded_bytes else 0
-                                                    total_mb = total_bytes / (1024 * 1024) if total_bytes else 0
-                                                    speed_mb = speed / (1024 * 1024) if speed else 0
+                                                    downloaded_mb = downloaded_bytes / \
+                                                        (1024 * 1024) if downloaded_bytes else 0
+                                                    total_mb = total_bytes / \
+                                                        (1024 * 1024) if total_bytes else 0
+                                                    speed_mb = speed / \
+                                                        (1024 * 1024) if speed else 0
 
                                                     # 计算进度
                                                     if total_bytes > 0:
-                                                        progress_percent = (downloaded_bytes / total_bytes) * 100
+                                                        progress_percent = (
+                                                            downloaded_bytes / total_bytes) * 100
                                                     else:
                                                         progress_percent = 0
 
                                                     # 计算预计剩余时间
-                                                    eta_seconds = d.get("eta", 0)
+                                                    eta_seconds = d.get(
+                                                        "eta", 0)
                                                     if eta_seconds and eta_seconds > 0:
                                                         if eta_seconds >= 3600:  # 超过1小时
                                                             eta_hours = eta_seconds // 3600
-                                                            eta_minutes = (eta_seconds % 3600) // 60
+                                                            eta_minutes = (
+                                                                eta_seconds % 3600) // 60
                                                             eta_str = f"{eta_hours}小时{eta_minutes}分钟"
                                                         elif eta_seconds >= 60:  # 超过1分钟
                                                             eta_minutes = eta_seconds // 60
@@ -8572,8 +8974,11 @@ class VideoDownloader:
 
                                                     # 创建进度条（使用你要的格式）
                                                     bar_length = 20
-                                                    filled_length = int(bar_length * progress_percent / 100)
-                                                    bar = '█' * filled_length + '░' * (bar_length - filled_length)
+                                                    filled_length = int(
+                                                        bar_length * progress_percent / 100)
+                                                    bar = '█' * filled_length + '░' * \
+                                                        (bar_length -
+                                                         filled_length)
 
                                                     # 构建简洁的进度消息（你要的格式）
                                                     progress_text = f"""📥 下载中 ({video_idx}/{len(videos)})
@@ -8585,22 +8990,31 @@ class VideoDownloader:
 
                                                     # 发送进度消息
                                                     if message_updater and callable(message_updater):
-                                                        logger.info(f"🔍 [DEBUG] 播放列表发送实时进度消息")
+                                                        logger.info(
+                                                            f"🔍 [DEBUG] 播放列表发送实时进度消息")
                                                         try:
                                                             # message_updater是同步函数，直接调用
-                                                            logger.info(f"🔍 [DEBUG] 播放列表调用message_updater(dict): {type(message_updater)}")
+                                                            logger.info(
+                                                                f"🔍 [DEBUG] 播放列表调用message_updater(dict): {type(message_updater)}")
                                                             message_updater(d)
-                                                            logger.info(f"✅ [DEBUG] 播放列表实时进度字典发送成功")
+                                                            logger.info(
+                                                                f"✅ [DEBUG] 播放列表实时进度字典发送成功")
                                                         except Exception as e:
-                                                            logger.warning(f"❌ [DEBUG] 播放列表实时进度消息发送失败: {e}")
-                                                            logger.warning(f"🔍 [DEBUG] 播放列表message_updater详情: {type(message_updater)}")
+                                                            logger.warning(
+                                                                f"❌ [DEBUG] 播放列表实时进度消息发送失败: {e}")
+                                                            logger.warning(
+                                                                f"🔍 [DEBUG] 播放列表message_updater详情: {type(message_updater)}")
                                                             import traceback
-                                                            logger.warning(f"🔍 [DEBUG] 播放列表完整错误堆栈: {traceback.format_exc()}")
+                                                            logger.warning(
+                                                                f"🔍 [DEBUG] 播放列表完整错误堆栈: {traceback.format_exc()}")
                                                 else:
-                                                    logger.info(f"🔍 [DEBUG] 播放列表跳过非下载状态的字典数据: {progress_text.get('status') if isinstance(progress_text, dict) else 'unknown'}")
+                                                    logger.info(
+                                                        f"🔍 [DEBUG] 播放列表跳过非下载状态的字典数据: {progress_text.get('status') if isinstance(progress_text, dict) else 'unknown'}")
                                         except Exception as e:
-                                            logger.warning(f"播放列表简化进度更新失败: {e}")
-                                            logger.warning(f"🔍 [DEBUG] 播放列表异常详情: message_updater={message_updater}, progress_text={progress_text}")
+                                            logger.warning(
+                                                f"播放列表简化进度更新失败: {e}")
+                                            logger.warning(
+                                                f"🔍 [DEBUG] 播放列表异常详情: message_updater={message_updater}, progress_text={progress_text}")
 
                                     # 调用download_video，直接传递上层的message_updater以使用统一的进度管道
                                     result = await self.download_video(video_url, message_updater if message_updater else None)
@@ -8611,7 +9025,8 @@ class VideoDownloader:
                                             # 获取文件名
                                             filename = "未知文件"
                                             if result.get('success', False) and result.get('filename'):
-                                                filename = os.path.basename(result.get('filename'))
+                                                filename = os.path.basename(
+                                                    result.get('filename'))
 
                                             progress_msg = f"""📥 正在下载第{playlist_index}/{len(playlists)}个播放列表：{playlist_name}
 
@@ -8623,7 +9038,8 @@ class VideoDownloader:
                                             message_updater(progress_msg)
                                             logger.info(f"✅ 手动发送播放列表进度更新成功")
                                         except Exception as e:
-                                            logger.warning(f"手动发送播放列表进度更新失败: {e}")
+                                            logger.warning(
+                                                f"手动发送播放列表进度更新失败: {e}")
 
                                     # 发送简洁的进度更新，而不是详细的完成消息
                                     if result.get('success', False) and message_updater and callable(message_updater):
@@ -8638,21 +9054,26 @@ class VideoDownloader:
                                             message_updater(progress_text)
                                             logger.info(f"✅ 播放列表视频进度更新已发送")
                                         except Exception as e:
-                                            logger.warning(f"发送播放列表视频进度更新失败: {e}")
+                                            logger.warning(
+                                                f"发送播放列表视频进度更新失败: {e}")
 
                                 except Exception as e:
                                     logger.error(f"播放列表视频下载异常: {e}")
                                     if message_updater and callable(message_updater):
                                         try:
                                             # message_updater是同步函数，直接调用
-                                            message_updater(f"❌ 视频下载失败: {str(e)}")
+                                            message_updater(
+                                                f"❌ 视频下载失败: {str(e)}")
                                         except Exception as msg_e:
-                                            logger.warning(f"发送错误消息失败: {msg_e}")
-                                    result = {'success': False, 'error': str(e)}
+                                            logger.warning(
+                                                f"发送错误消息失败: {msg_e}")
+                                    result = {'success': False,
+                                              'error': str(e)}
                                 finally:
                                     # 恢复原始下载路径
                                     self.bilibili_download_path = original_bilibili_path
-                                    logger.info(f"🔧 恢复B站下载路径: {self.bilibili_download_path}")
+                                    logger.info(
+                                        f"🔧 恢复B站下载路径: {self.bilibili_download_path}")
 
                                 if result.get('success', False):
                                     playlist_downloaded += 1
@@ -8660,16 +9081,19 @@ class VideoDownloader:
                                     # 累计文件大小
                                     if 'size_mb' in result:
                                         total_size_mb += result['size_mb']
-                                    logger.info(f"✅ 播放列表视频下载成功: {video_idx}/{len(videos)}")
+                                    logger.info(
+                                        f"✅ 播放列表视频下载成功: {video_idx}/{len(videos)}")
                                 else:
                                     playlist_failed += 1
                                     total_failed += 1
-                                    logger.error(f"❌ 播放列表视频下载失败: {video_idx}/{len(videos)} - {result.get('error', '未知错误')}")
+                                    logger.error(
+                                        f"❌ 播放列表视频下载失败: {video_idx}/{len(videos)} - {result.get('error', '未知错误')}")
 
                             except Exception as e:
                                 playlist_failed += 1
                                 total_failed += 1
-                                logger.error(f"❌ 播放列表视频下载异常: {video_idx}/{len(videos)} - {e}")
+                                logger.error(
+                                    f"❌ 播放列表视频下载异常: {video_idx}/{len(videos)} - {e}")
 
                     # 记录播放列表结果
                     if playlist_downloaded > 0:
@@ -8681,7 +9105,8 @@ class VideoDownloader:
                             'download_path': str(user_download_path / playlist_name)
                         }
                         downloaded_results.append(playlist_result)
-                        logger.info(f"✅ 播放列表处理完成: {playlist_name} (成功: {playlist_downloaded}, 失败: {playlist_failed})")
+                        logger.info(
+                            f"✅ 播放列表处理完成: {playlist_name} (成功: {playlist_downloaded}, 失败: {playlist_failed})")
 
                 except Exception as e:
                     logger.error(f"❌ 播放列表处理异常: {playlist_name} - {e}")
@@ -8714,52 +9139,60 @@ class VideoDownloader:
                     single_failed = 0
 
                     for video_idx, video in enumerate(single_videos, 1):
-                        video_url = video.get('url') or video.get('webpage_url')
+                        video_url = video.get(
+                            'url') or video.get('webpage_url')
                         if video_url:
                             try:
-                                logger.info(f"🎬 调用现有下载方法处理单独视频 {video_idx}/{len(single_videos)}: {video_url}")
-                                logger.info(f"🔍 传递给download_video的message_updater: {type(message_updater)}, callable: {callable(message_updater)}")
-
-
+                                logger.info(
+                                    f"🎬 调用现有下载方法处理单独视频 {video_idx}/{len(single_videos)}: {video_url}")
+                                logger.info(
+                                    f"🔍 传递给download_video的message_updater: {type(message_updater)}, callable: {callable(message_updater)}")
 
                                 # 创建单独视频目录（与合集同级）
                                 single_video_path = user_download_path / "单独视频"
-                                single_video_path.mkdir(parents=True, exist_ok=True)
+                                single_video_path.mkdir(
+                                    parents=True, exist_ok=True)
                                 logger.info(f"📁 创建单独视频目录: {single_video_path}")
 
                                 # 生成更好的文件名
                                 video_title = video.get('title', '')
-                                clean_title = re.sub(r'[\\/:*?"<>|]', '_', video_title).strip()
+                                clean_title = re.sub(
+                                    r'[\\/:*?"<>|]', '_', video_title).strip()
                                 filename = f"{video_idx:02d}. {clean_title}.mp4"
                                 logger.info(f"📝 生成单视频文件名: {filename}")
-
-
 
                                 # 临时修改下载路径到单独视频目录
                                 original_bilibili_path = self.bilibili_download_path
                                 self.bilibili_download_path = single_video_path
-                                logger.info(f"🔧 临时修改B站下载路径: {self.bilibili_download_path}")
+                                logger.info(
+                                    f"🔧 临时修改B站下载路径: {self.bilibili_download_path}")
 
                                 try:
                                     # 创建简化的进度更新器，确保能正常工作
                                     def progress_updater(progress_text):
-                                        logger.info(f"🔍 [DEBUG] 单独视频进度更新器被调用: type={type(progress_text)}")
+                                        logger.info(
+                                            f"🔍 [DEBUG] 单独视频进度更新器被调用: type={type(progress_text)}")
 
                                         if isinstance(progress_text, str):
                                             # 如果是字符串，直接显示
-                                            logger.info(f"🔍 [DEBUG] 收到字符串消息: {progress_text[:100]}...")
+                                            logger.info(
+                                                f"🔍 [DEBUG] 收到字符串消息: {progress_text[:100]}...")
                                         else:
                                             # 如果是字典（yt-dlp进度数据），转换为格式化消息
                                             d = progress_text
-                                            logger.info(f"🔍 [DEBUG] 收到进度字典: status={d.get('status')}")
+                                            logger.info(
+                                                f"🔍 [DEBUG] 收到进度字典: status={d.get('status')}")
 
                                             if d.get("status") == "downloading":
-                                                logger.info(f"🔍 [DEBUG] 处理下载进度...")
+                                                logger.info(
+                                                    f"🔍 [DEBUG] 处理下载进度...")
 
                                                 # 简化的进度消息，先确保基本功能工作
-                                                filename = d.get("filename", "未知文件")
+                                                filename = d.get(
+                                                    "filename", "未知文件")
                                                 if filename:
-                                                    filename = os.path.basename(filename)
+                                                    filename = os.path.basename(
+                                                        filename)
 
                                                 simple_progress = f"""📥 正在下载第{single_playlist_index}/{total_playlists_with_single}个播放列表：单独视频
 
@@ -8767,40 +9200,54 @@ class VideoDownloader:
 📝 文件: {filename}
 📊 状态: 下载中..."""
 
-                                                logger.info(f"🔍 [DEBUG] 准备发送简化进度消息")
+                                                logger.info(
+                                                    f"🔍 [DEBUG] 准备发送简化进度消息")
 
                                                 # 直接尝试发送消息，不使用复杂的线程
                                                 if message_updater and callable(message_updater):
                                                     try:
-                                                        logger.info(f"🔍 [DEBUG] 尝试发送进度消息...")
+                                                        logger.info(
+                                                            f"🔍 [DEBUG] 尝试发送进度消息...")
                                                         # 暂时跳过异步调用，只记录日志
-                                                        logger.info(f"✅ [DEBUG] 模拟发送进度消息成功")
+                                                        logger.info(
+                                                            f"✅ [DEBUG] 模拟发送进度消息成功")
                                                     except Exception as e:
-                                                        logger.warning(f"❌ [DEBUG] 发送进度消息失败: {e}")
+                                                        logger.warning(
+                                                            f"❌ [DEBUG] 发送进度消息失败: {e}")
                                                 # 获取进度信息
-                                                filename = d.get("filename", "未知文件")
+                                                filename = d.get(
+                                                    "filename", "未知文件")
                                                 if filename:
-                                                    filename = os.path.basename(filename)
+                                                    filename = os.path.basename(
+                                                        filename)
 
                                                 # 调试：打印所有可用的字段
-                                                logger.info(f"🔍 进度字典所有字段: {list(d.keys())}")
+                                                logger.info(
+                                                    f"🔍 进度字典所有字段: {list(d.keys())}")
                                                 logger.info(f"🔍 进度字典内容: {d}")
 
-                                                downloaded_bytes = d.get("downloaded_bytes", 0)
-                                                total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
+                                                downloaded_bytes = d.get(
+                                                    "downloaded_bytes", 0)
+                                                total_bytes = d.get("total_bytes") or d.get(
+                                                    "total_bytes_estimate", 0)
                                                 speed = d.get("speed", 0)
 
                                                 # 调试：打印原始数值
-                                                logger.info(f"🔍 原始数值: downloaded_bytes={downloaded_bytes}, total_bytes={total_bytes}, speed={speed}")
+                                                logger.info(
+                                                    f"🔍 原始数值: downloaded_bytes={downloaded_bytes}, total_bytes={total_bytes}, speed={speed}")
 
                                                 # 格式化大小和速度
-                                                downloaded_mb = downloaded_bytes / (1024 * 1024) if downloaded_bytes else 0
-                                                total_mb = total_bytes / (1024 * 1024) if total_bytes else 0
-                                                speed_mb = speed / (1024 * 1024) if speed else 0
+                                                downloaded_mb = downloaded_bytes / \
+                                                    (1024 * 1024) if downloaded_bytes else 0
+                                                total_mb = total_bytes / \
+                                                    (1024 * 1024) if total_bytes else 0
+                                                speed_mb = speed / \
+                                                    (1024 * 1024) if speed else 0
 
                                                 # 计算进度
                                                 if total_bytes > 0:
-                                                    progress_percent = (downloaded_bytes / total_bytes) * 100
+                                                    progress_percent = (
+                                                        downloaded_bytes / total_bytes) * 100
                                                 else:
                                                     progress_percent = 0
 
@@ -8815,8 +9262,10 @@ class VideoDownloader:
 
                                                 # 创建进度条
                                                 bar_length = 20
-                                                filled_length = int(bar_length * progress_percent / 100)
-                                                bar = '█' * filled_length + '░' * (bar_length - filled_length)
+                                                filled_length = int(
+                                                    bar_length * progress_percent / 100)
+                                                bar = '█' * filled_length + '░' * \
+                                                    (bar_length - filled_length)
 
                                                 # 构建详细的进度消息
                                                 progress_text = f"""📥 正在下载第{single_playlist_index}/{total_playlists_with_single}个播放列表：单独视频
@@ -8839,71 +9288,94 @@ class VideoDownloader:
                                                             try:
                                                                 # 在新线程中创建事件循环
                                                                 loop = asyncio.new_event_loop()
-                                                                asyncio.set_event_loop(loop)
+                                                                asyncio.set_event_loop(
+                                                                    loop)
 
                                                                 # 运行异步函数
-                                                                loop.run_until_complete(message_updater(progress_text))
+                                                                loop.run_until_complete(
+                                                                    message_updater(progress_text))
                                                                 loop.close()
 
-                                                                logger.info(f"✅ 线程中成功发送进度消息")
+                                                                logger.info(
+                                                                    f"✅ 线程中成功发送进度消息")
                                                             except Exception as e:
-                                                                logger.warning(f"线程中发送进度消息失败: {e}")
+                                                                logger.warning(
+                                                                    f"线程中发送进度消息失败: {e}")
 
                                                         # 启动线程（不等待完成）
-                                                        thread = threading.Thread(target=send_progress_message, daemon=True)
+                                                        thread = threading.Thread(
+                                                            target=send_progress_message, daemon=True)
                                                         thread.start()
 
                                                     except Exception as e:
-                                                        logger.warning(f"创建进度消息线程失败: {e}")
+                                                        logger.warning(
+                                                            f"创建进度消息线程失败: {e}")
 
                                     # 创建简化的进度更新器
                                     async def simple_progress_updater(progress_text):
                                         try:
-                                            logger.info(f"🔍 [DEBUG] simple_progress_updater被调用: type={type(progress_text)}")
-                                            logger.info(f"🔍 [DEBUG] message_updater状态: {message_updater}, type={type(message_updater)}")
+                                            logger.info(
+                                                f"🔍 [DEBUG] simple_progress_updater被调用: type={type(progress_text)}")
+                                            logger.info(
+                                                f"🔍 [DEBUG] message_updater状态: {message_updater}, type={type(message_updater)}")
 
                                             if isinstance(progress_text, str):
                                                 # 字符串消息直接发送
                                                 if message_updater and callable(message_updater):
-                                                    logger.info(f"🔍 [DEBUG] 准备调用message_updater")
+                                                    logger.info(
+                                                        f"🔍 [DEBUG] 准备调用message_updater")
                                                     # message_updater是同步函数，直接调用
-                                                    message_updater(progress_text)
-                                                    logger.info(f"✅ [DEBUG] message_updater调用成功")
+                                                    message_updater(
+                                                        progress_text)
+                                                    logger.info(
+                                                        f"✅ [DEBUG] message_updater调用成功")
                                                 else:
-                                                    logger.warning(f"⚠️ [DEBUG] message_updater不可用: {message_updater}")
+                                                    logger.warning(
+                                                        f"⚠️ [DEBUG] message_updater不可用: {message_updater}")
                                             else:
                                                 # 字典数据处理，转换为进度消息
-                                                logger.info(f"🔍 [DEBUG] 处理字典数据: {progress_text}")
+                                                logger.info(
+                                                    f"🔍 [DEBUG] 处理字典数据: {progress_text}")
 
                                                 if isinstance(progress_text, dict) and progress_text.get("status") == "downloading":
                                                     d = progress_text
 
                                                     # 获取进度信息
-                                                    filename = d.get("filename", "未知文件")
+                                                    filename = d.get(
+                                                        "filename", "未知文件")
                                                     if filename:
-                                                        filename = os.path.basename(filename)
+                                                        filename = os.path.basename(
+                                                            filename)
 
-                                                    downloaded_bytes = d.get("downloaded_bytes", 0)
-                                                    total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
+                                                    downloaded_bytes = d.get(
+                                                        "downloaded_bytes", 0)
+                                                    total_bytes = d.get("total_bytes") or d.get(
+                                                        "total_bytes_estimate", 0)
                                                     speed = d.get("speed", 0)
 
                                                     # 格式化大小和速度
-                                                    downloaded_mb = downloaded_bytes / (1024 * 1024) if downloaded_bytes else 0
-                                                    total_mb = total_bytes / (1024 * 1024) if total_bytes else 0
-                                                    speed_mb = speed / (1024 * 1024) if speed else 0
+                                                    downloaded_mb = downloaded_bytes / \
+                                                        (1024 * 1024) if downloaded_bytes else 0
+                                                    total_mb = total_bytes / \
+                                                        (1024 * 1024) if total_bytes else 0
+                                                    speed_mb = speed / \
+                                                        (1024 * 1024) if speed else 0
 
                                                     # 计算进度
                                                     if total_bytes > 0:
-                                                        progress_percent = (downloaded_bytes / total_bytes) * 100
+                                                        progress_percent = (
+                                                            downloaded_bytes / total_bytes) * 100
                                                     else:
                                                         progress_percent = 0
 
                                                     # 计算预计剩余时间
-                                                    eta_seconds = d.get("eta", 0)
+                                                    eta_seconds = d.get(
+                                                        "eta", 0)
                                                     if eta_seconds and eta_seconds > 0:
                                                         if eta_seconds >= 3600:  # 超过1小时
                                                             eta_hours = eta_seconds // 3600
-                                                            eta_minutes = (eta_seconds % 3600) // 60
+                                                            eta_minutes = (
+                                                                eta_seconds % 3600) // 60
                                                             eta_str = f"{eta_hours}小时{eta_minutes}分钟"
                                                         elif eta_seconds >= 60:  # 超过1分钟
                                                             eta_minutes = eta_seconds // 60
@@ -8916,10 +9388,13 @@ class VideoDownloader:
 
                                                     # 创建进度条（使用你要的格式）
                                                     bar_length = 20
-                                                    filled_length = int(bar_length * progress_percent / 100)
+                                                    filled_length = int(
+                                                        bar_length * progress_percent / 100)
                                                     bar = '░' * bar_length  # 先全部用空心
                                                     # 然后填充实心部分（从左到右）
-                                                    bar = '█' * filled_length + '░' * (bar_length - filled_length)
+                                                    bar = '█' * filled_length + '░' * \
+                                                        (bar_length -
+                                                         filled_length)
 
                                                     # 构建简洁的进度消息（你要的格式）
                                                     progress_text = f"""📥 下载中
@@ -8931,34 +9406,45 @@ class VideoDownloader:
 
                                                     # 发送进度消息
                                                     if message_updater and callable(message_updater):
-                                                        logger.info(f"🔍 [DEBUG] 发送实时进度消息")
+                                                        logger.info(
+                                                            f"🔍 [DEBUG] 发送实时进度消息")
                                                         try:
                                                             # message_updater是同步函数，直接调用
-                                                            logger.info(f"🔍 [DEBUG] 调用message_updater: {type(message_updater)}")
-                                                            message_updater(progress_text)
-                                                            logger.info(f"✅ [DEBUG] 实时进度消息发送成功")
+                                                            logger.info(
+                                                                f"🔍 [DEBUG] 调用message_updater: {type(message_updater)}")
+                                                            message_updater(
+                                                                progress_text)
+                                                            logger.info(
+                                                                f"✅ [DEBUG] 实时进度消息发送成功")
                                                         except Exception as e:
-                                                            logger.warning(f"❌ [DEBUG] 实时进度消息发送失败: {e}")
-                                                            logger.warning(f"🔍 [DEBUG] message_updater详情: {type(message_updater)}")
+                                                            logger.warning(
+                                                                f"❌ [DEBUG] 实时进度消息发送失败: {e}")
+                                                            logger.warning(
+                                                                f"🔍 [DEBUG] message_updater详情: {type(message_updater)}")
                                                             import traceback
-                                                            logger.warning(f"🔍 [DEBUG] 完整错误堆栈: {traceback.format_exc()}")
+                                                            logger.warning(
+                                                                f"🔍 [DEBUG] 完整错误堆栈: {traceback.format_exc()}")
                                                 else:
-                                                    logger.info(f"🔍 [DEBUG] 跳过非下载状态的字典数据: {progress_text.get('status') if isinstance(progress_text, dict) else 'unknown'}")
+                                                    logger.info(
+                                                        f"🔍 [DEBUG] 跳过非下载状态的字典数据: {progress_text.get('status') if isinstance(progress_text, dict) else 'unknown'}")
                                         except Exception as e:
                                             logger.warning(f"简化进度更新失败: {e}")
-                                            logger.warning(f"🔍 [DEBUG] 异常详情: message_updater={message_updater}, progress_text={progress_text}")
+                                            logger.warning(
+                                                f"🔍 [DEBUG] 异常详情: message_updater={message_updater}, progress_text={progress_text}")
 
                                     # 调用download_video，直接传递上层的message_updater以使用统一的进度管道
                                     result = await self.download_video(video_url, message_updater if message_updater else None)
 
                                     # 手动发送进度更新（简化版本）
-                                    logger.info(f"🔍 检查message_updater状态: type={type(message_updater)}, callable={callable(message_updater) if message_updater else False}")
+                                    logger.info(
+                                        f"🔍 检查message_updater状态: type={type(message_updater)}, callable={callable(message_updater) if message_updater else False}")
                                     if message_updater and callable(message_updater):
                                         try:
                                             # 获取文件名
                                             filename = "未知文件"
                                             if result.get('success', False) and result.get('filename'):
-                                                filename = os.path.basename(result.get('filename'))
+                                                filename = os.path.basename(
+                                                    result.get('filename'))
 
                                             progress_msg = f"""📥 正在下载第{single_playlist_index}/{total_playlists_with_single}个播放列表：单独视频
 
@@ -8967,24 +9453,29 @@ class VideoDownloader:
 📊 状态: ✅ 下载完成
 💾 大小: {result.get('size_mb', 0):.2f} MB"""
 
-                                            logger.info(f"🔍 准备发送进度消息，message_updater类型: {type(message_updater)}")
+                                            logger.info(
+                                                f"🔍 准备发送进度消息，message_updater类型: {type(message_updater)}")
                                             # message_updater是同步函数，直接调用
                                             message_updater(progress_msg)
                                             logger.info(f"✅ 手动发送进度更新成功")
                                         except Exception as e:
                                             logger.warning(f"手动发送进度更新失败: {e}")
                                     else:
-                                        logger.warning(f"⚠️ message_updater不可用: {message_updater}")
+                                        logger.warning(
+                                            f"⚠️ message_updater不可用: {message_updater}")
 
                                     # 发送简洁的进度更新，而不是详细的完成消息
-                                    logger.info(f"🔍 检查进度更新发送条件: success={result.get('success', False)}, message_updater={type(message_updater)}")
+                                    logger.info(
+                                        f"🔍 检查进度更新发送条件: success={result.get('success', False)}, message_updater={type(message_updater)}")
                                     if result.get('success', False) and message_updater and callable(message_updater):
                                         try:
                                             # 检查所有变量是否为None
-                                            filename = result.get('filename', '未知文件')
+                                            filename = result.get(
+                                                'filename', '未知文件')
                                             size_mb = result.get('size_mb', 0)
 
-                                            logger.info(f"🔍 [DEBUG] 进度更新变量检查: filename={filename}, size_mb={size_mb}, single_video_path={single_video_path}")
+                                            logger.info(
+                                                f"🔍 [DEBUG] 进度更新变量检查: filename={filename}, size_mb={size_mb}, single_video_path={single_video_path}")
 
                                             # 只显示简单的进度更新，详细总结在最后显示
                                             progress_text = f"""📥 正在下载第{single_playlist_index}/{total_playlists_with_single}个播放列表：单独视频
@@ -8993,32 +9484,41 @@ class VideoDownloader:
 📝 文件: {os.path.basename(filename)}
 💾 大小: {size_mb:.2f} MB"""
 
-                                            logger.info(f"🔍 准备发送进度更新，message_updater类型: {type(message_updater)}")
-                                            logger.info(f"🔍 [DEBUG] 进度更新内容: {progress_text}")
+                                            logger.info(
+                                                f"🔍 准备发送进度更新，message_updater类型: {type(message_updater)}")
+                                            logger.info(
+                                                f"🔍 [DEBUG] 进度更新内容: {progress_text}")
 
                                             # message_updater是同步函数，直接调用
                                             message_updater(progress_text)
                                             logger.info(f"✅ 单独视频进度更新已发送")
                                         except Exception as e:
-                                            logger.warning(f"发送单独视频进度更新失败: {e}")
+                                            logger.warning(
+                                                f"发送单独视频进度更新失败: {e}")
                                             import traceback
-                                            logger.warning(f"🔍 [DEBUG] 进度更新发送错误堆栈: {traceback.format_exc()}")
+                                            logger.warning(
+                                                f"🔍 [DEBUG] 进度更新发送错误堆栈: {traceback.format_exc()}")
                                     else:
-                                        logger.warning(f"⚠️ 跳过进度更新发送: success={result.get('success', False)}, message_updater={message_updater}")
+                                        logger.warning(
+                                            f"⚠️ 跳过进度更新发送: success={result.get('success', False)}, message_updater={message_updater}")
 
                                 except Exception as e:
                                     logger.error(f"单独视频下载异常: {e}")
                                     if message_updater and callable(message_updater):
                                         try:
                                             # message_updater是同步函数，直接调用
-                                            message_updater(f"❌ 视频下载失败: {str(e)}")
+                                            message_updater(
+                                                f"❌ 视频下载失败: {str(e)}")
                                         except Exception as msg_e:
-                                            logger.warning(f"发送错误消息失败: {msg_e}")
-                                    result = {'success': False, 'error': str(e)}
+                                            logger.warning(
+                                                f"发送错误消息失败: {msg_e}")
+                                    result = {'success': False,
+                                              'error': str(e)}
                                 finally:
                                     # 恢复原始下载路径
                                     self.bilibili_download_path = original_bilibili_path
-                                    logger.info(f"🔧 恢复B站下载路径: {self.bilibili_download_path}")
+                                    logger.info(
+                                        f"🔧 恢复B站下载路径: {self.bilibili_download_path}")
 
                                 if result.get('success', False):
                                     single_downloaded += 1
@@ -9026,16 +9526,19 @@ class VideoDownloader:
                                     # 累计文件大小
                                     if 'size_mb' in result:
                                         total_size_mb += result['size_mb']
-                                    logger.info(f"✅ 单独视频下载成功: {video_idx}/{len(single_videos)}")
+                                    logger.info(
+                                        f"✅ 单独视频下载成功: {video_idx}/{len(single_videos)}")
                                 else:
                                     single_failed += 1
                                     total_failed += 1
-                                    logger.error(f"❌ 单独视频下载失败: {video_idx}/{len(single_videos)} - {result.get('error', '未知错误')}")
+                                    logger.error(
+                                        f"❌ 单独视频下载失败: {video_idx}/{len(single_videos)} - {result.get('error', '未知错误')}")
 
                             except Exception as e:
                                 single_failed += 1
                                 total_failed += 1
-                                logger.error(f"❌ 单独视频下载异常: {video_idx}/{len(single_videos)} - {e}")
+                                logger.error(
+                                    f"❌ 单独视频下载异常: {video_idx}/{len(single_videos)} - {e}")
 
                     # 记录单独视频结果
                     if single_downloaded > 0:
@@ -9047,7 +9550,8 @@ class VideoDownloader:
                             'download_path': str(user_download_path / "单独视频")
                         }
                         downloaded_results.append(single_result)
-                        logger.info(f"✅ 单独视频处理完成: (成功: {single_downloaded}, 失败: {single_failed})")
+                        logger.info(
+                            f"✅ 单独视频处理完成: (成功: {single_downloaded}, 失败: {single_failed})")
 
                 except Exception as e:
                     logger.error(f"❌ 单独视频下载异常: {e}")
@@ -9058,7 +9562,8 @@ class VideoDownloader:
 
             # 计算成功率和失败数量
             total_videos = len(entries)
-            success_rate = (total_downloaded / total_videos) * 100 if total_videos > 0 else 0
+            success_rate = (total_downloaded / total_videos) * \
+                100 if total_videos > 0 else 0
 
             # 格式化总大小显示
             if total_size_mb >= 1024:
@@ -9066,7 +9571,8 @@ class VideoDownloader:
             else:
                 total_size_str = f"{total_size_mb:.2f}MB"
 
-            logger.info(f"📊 下载统计: {total_downloaded}/{total_videos} 个视频成功，成功率: {success_rate:.1f}%")
+            logger.info(
+                f"📊 下载统计: {total_downloaded}/{total_videos} 个视频成功，成功率: {success_rate:.1f}%")
             logger.info(f"📊 播放列表统计: {len(downloaded_results)} 个播放列表")
 
             # 步骤7: 构建完成消息
@@ -9110,7 +9616,8 @@ class VideoDownloader:
 
             # 步骤8: 返回结果
             if total_downloaded > 0:
-                logger.info(f"🎉 UP主所有视频下载完成: {total_downloaded}/{total_videos} 个成功")
+                logger.info(
+                    f"🎉 UP主所有视频下载完成: {total_downloaded}/{total_videos} 个成功")
 
                 # 添加详细的下载总结日志
                 logger.info("=" * 60)
@@ -9133,7 +9640,8 @@ class VideoDownloader:
                         failed_count = playlist.get('failed_count', 0)
                         download_path = playlist.get('download_path', '未知')
                         logger.info(f"  {i}. {playlist_title}")
-                        logger.info(f"     视频数: {video_count}, 失败: {failed_count}")
+                        logger.info(
+                            f"     视频数: {video_count}, 失败: {failed_count}")
                         logger.info(f"     保存位置: {download_path}")
 
                 # 显示目录结构
@@ -9146,10 +9654,13 @@ class VideoDownloader:
                                 for item in sorted(os.listdir(path)):
                                     item_path = os.path.join(path, item)
                                     if os.path.isdir(item_path):
-                                        log_directory_structure(item_path, indent + "  ")
+                                        log_directory_structure(
+                                            item_path, indent + "  ")
                                     else:
-                                        size = os.path.getsize(item_path) / (1024 * 1024)  # MB
-                                        logger.info(f"{indent}  📄 {item} ({size:.2f}MB)")
+                                        size = os.path.getsize(
+                                            item_path) / (1024 * 1024)  # MB
+                                        logger.info(
+                                            f"{indent}  📄 {item} ({size:.2f}MB)")
                             except PermissionError:
                                 logger.warning(f"{indent}  ⚠️ 无法访问目录内容")
                         else:
@@ -9304,7 +9815,8 @@ class VideoDownloader:
             logger.info("🔍 步骤5: 开始下载播放列表（设置60秒超时）...")
 
             def download_playlist():
-                logger.info(f"🔧 [BILIBILI_PLAYLIST_DOWNLOAD] 最终ydl_opts: {ydl_opts}")
+                logger.info(
+                    f"🔧 [BILIBILI_PLAYLIST_DOWNLOAD] 最终ydl_opts: {ydl_opts}")
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     logger.info("🚀 开始下载Bilibili播放列表视频...")
                     return ydl.download(
@@ -9373,7 +9885,8 @@ class VideoDownloader:
                     "completion_rate": check_result.get("completion_rate", 100),
                 }
             else:
-                logger.info(f"📥 播放列表未完整下载，原因: {check_result.get('reason', '未知')}")
+                logger.info(
+                    f"📥 播放列表未完整下载，原因: {check_result.get('reason', '未知')}")
                 if check_result.get("completion_rate", 0) > 0:
                     logger.info(
                         f"📊 当前完成度: {check_result.get('completion_rate', 0):.1f}%"
@@ -9434,17 +9947,20 @@ class VideoDownloader:
                 # 调试：检查播放列表信息
                 logger.info(f"🔍 播放列表原始标题: {info.get('title', 'N/A')}")
                 logger.info(f"🔍 播放列表ID: {playlist_id}")
-                logger.info(f"🔍 播放列表其他字段: uploader={info.get('uploader', 'N/A')}, uploader_id={info.get('uploader_id', 'N/A')}")
+                logger.info(
+                    f"🔍 播放列表其他字段: uploader={info.get('uploader', 'N/A')}, uploader_id={info.get('uploader_id', 'N/A')}")
 
                 # 创建播放列表目录
                 # 尝试从不同字段获取播放列表标题
                 raw_title = info.get("title", f"Playlist_{playlist_id}")
                 if raw_title == playlist_id or raw_title.startswith("Playlist_"):
                     # 如果标题就是ID，尝试从其他字段获取
-                    raw_title = info.get("uploader", info.get("channel", f"Playlist_{playlist_id}"))
+                    raw_title = info.get("uploader", info.get(
+                        "channel", f"Playlist_{playlist_id}"))
                     logger.info(f"🔧 使用备用标题: {raw_title}")
 
-                playlist_title = re.sub(r'[\\/:*?"<>|]', "_", raw_title).strip()
+                playlist_title = re.sub(
+                    r'[\\/:*?"<>|]', "_", raw_title).strip()
                 # 根据设置决定文件夹名称格式
                 if hasattr(self, 'bot') and hasattr(self.bot, 'youtube_id_tags') and self.bot.youtube_id_tags:
                     playlist_title_with_id = f"[{playlist_id}]"
@@ -9493,8 +10009,10 @@ class VideoDownloader:
 
                 # 使用绝对路径构建outtmpl，根据设置决定文件名前缀和是否添加视频ID
                 # 检查是否开启时间戳命名
-                use_timestamp = hasattr(self, 'bot') and hasattr(self.bot, 'youtube_timestamp_naming') and self.bot.youtube_timestamp_naming
-                use_id_tags = hasattr(self, 'bot') and hasattr(self.bot, 'youtube_id_tags') and self.bot.youtube_id_tags
+                use_timestamp = hasattr(self, 'bot') and hasattr(
+                    self.bot, 'youtube_timestamp_naming') and self.bot.youtube_timestamp_naming
+                use_id_tags = hasattr(self, 'bot') and hasattr(
+                    self.bot, 'youtube_id_tags') and self.bot.youtube_id_tags
 
                 if use_timestamp:
                     # 使用时间戳作为前缀
@@ -9523,23 +10041,28 @@ class VideoDownloader:
                     # 🎯 真正修复：恢复v0.4-dev3的成功方式 - 让yt-dlp自己选择最佳格式
                     format_spec = None  # 不设置format，使用yt-dlp默认的"best"
                     merge_format = "mp4"
-                    logger.info("🎬 YouTube频道下载使用yt-dlp原生最佳格式选择（恢复v0.4-dev3成功方式）")
+                    logger.info(
+                        "🎬 YouTube频道下载使用yt-dlp原生最佳格式选择（恢复v0.4-dev3成功方式）")
 
                 # 使用增强配置，避免PART文件
-                logger.info(f"🔧 [PROGRESS_HOOKS] progress_callback是否为None: {progress_callback is None}")
-                logger.info(f"🔧 [PROGRESS_HOOKS] progress_callback类型: {type(progress_callback)}")
+                logger.info(
+                    f"🔧 [PROGRESS_HOOKS] progress_callback是否为None: {progress_callback is None}")
+                logger.info(
+                    f"🔧 [PROGRESS_HOOKS] progress_callback类型: {type(progress_callback)}")
                 base_opts = {
                     "outtmpl": abs_outtmpl,
                     "merge_output_format": merge_format,
                     "ignoreerrors": True,
                     "progress_hooks": [progress_callback] if progress_callback else [],
                 }
-                logger.info(f"🔧 [PROGRESS_HOOKS] base_opts中的progress_hooks: {len(base_opts['progress_hooks'])} 个回调")
+                logger.info(
+                    f"🔧 [PROGRESS_HOOKS] base_opts中的progress_hooks: {len(base_opts['progress_hooks'])} 个回调")
 
                 # 🎯 关键修复：无论音频还是视频模式，都要添加format设置
                 if format_spec:
                     base_opts["format"] = format_spec
-                    logger.info(f"🎯 [FORMAT_FIX] 已设置format到base_opts: {format_spec}")
+                    logger.info(
+                        f"🎯 [FORMAT_FIX] 已设置format到base_opts: {format_spec}")
 
                 ydl_opts = self._get_enhanced_ydl_opts(base_opts)
                 logger.info("🛡️ 使用增强配置，避免PART文件产生")
@@ -9574,10 +10097,12 @@ class VideoDownloader:
                     ydl_opts["writesubtitles"] = True     # 下载手动字幕
                     ydl_opts["subtitleslangs"] = ["zh", "en"]  # 字幕语言：中文和英文
                     ydl_opts["convertsubtitles"] = "srt"  # 转换为SRT格式
-                    ydl_opts["subtitlesformat"] = "best[ext=srt]/srt/best"  # 优先选择SRT格式
+                    # 优先选择SRT格式
+                    ydl_opts["subtitlesformat"] = "best[ext=srt]/srt/best"
                     logger.info("📝 播放列表开启YouTube字幕下载（中文、英文，SRT格式）")
 
-                logger.info(f"🔧 [YT_PLAYLIST_WITH_PROGRESS] 最终ydl_opts关键配置: outtmpl={abs_outtmpl}")
+                logger.info(
+                    f"🔧 [YT_PLAYLIST_WITH_PROGRESS] 最终ydl_opts关键配置: outtmpl={abs_outtmpl}")
 
                 # 使用原始URL（如果提供）或构造播放列表URL
                 if original_url:
@@ -9593,7 +10118,8 @@ class VideoDownloader:
 
                     # 下载完成后检查并处理PART文件
                     logger.info("🔍 检查YouTube播放列表下载完成状态...")
-                    resume_success = self._resume_failed_downloads(download_path, playlist_url, max_retries=5)
+                    resume_success = self._resume_failed_downloads(
+                        download_path, playlist_url, max_retries=5)
 
                     if not resume_success:
                         logger.warning("⚠️ 部分文件下载未完成，但已达到最大重试次数")
@@ -9619,57 +10145,61 @@ class VideoDownloader:
             # 使用预期文件名精确查找（现在动态播放列表也有预期文件信息了）
             logger.info("🔍 使用预期文件名查找下载的文件")
             for expected_file in expected_files:
-                    expected_filename = expected_file['filename']
-                    expected_path = playlist_path / expected_filename
+                expected_filename = expected_file['filename']
+                expected_path = playlist_path / expected_filename
 
-                    # 检查预期文件是否存在
-                    actual_path = expected_path
-                    if expected_path.exists():
-                        # 文件存在，直接使用
-                        pass
-                    elif (hasattr(self, 'bot') and hasattr(self.bot, 'youtube_audio_mode') and
-                          self.bot.youtube_audio_mode):
-                        # 音频模式：检查是否存在对应的MP3文件
-                        mp3_path = expected_path.with_suffix('.mp3')
-                        if mp3_path.exists():
-                            actual_path = mp3_path
-                            logger.info(f"🎵 播放列表音频模式：找到转换后的MP3文件: {mp3_path.name}")
-                        else:
-                            logger.warning(f"⚠️ 播放列表音频模式：未找到文件: {expected_filename} 或 {mp3_path.name}")
-                            continue
+                # 检查预期文件是否存在
+                actual_path = expected_path
+                if expected_path.exists():
+                    # 文件存在，直接使用
+                    pass
+                elif (hasattr(self, 'bot') and hasattr(self.bot, 'youtube_audio_mode') and
+                      self.bot.youtube_audio_mode):
+                    # 音频模式：检查是否存在对应的MP3文件
+                    mp3_path = expected_path.with_suffix('.mp3')
+                    if mp3_path.exists():
+                        actual_path = mp3_path
+                        logger.info(f"🎵 播放列表音频模式：找到转换后的MP3文件: {mp3_path.name}")
                     else:
-                        logger.warning(f"⚠️ 未找到预期文件: {expected_filename}")
+                        logger.warning(
+                            f"⚠️ 播放列表音频模式：未找到文件: {expected_filename} 或 {mp3_path.name}")
                         continue
+                else:
+                    logger.warning(f"⚠️ 未找到预期文件: {expected_filename}")
+                    continue
 
-                    # 处理找到的文件
-                    try:
-                        file_size = actual_path.stat().st_size
-                        if file_size > 0:
-                            file_size_mb = file_size / (1024 * 1024)
-                            total_size_mb += file_size_mb
+                # 处理找到的文件
+                try:
+                    file_size = actual_path.stat().st_size
+                    if file_size > 0:
+                        file_size_mb = file_size / (1024 * 1024)
+                        total_size_mb += file_size_mb
 
-                            # 获取媒体信息
-                            media_info = self.get_media_info(str(actual_path))
-                            resolution = media_info.get('resolution', '未知')
-                            if resolution != '未知':
-                                all_resolutions.add(resolution)
+                        # 获取媒体信息
+                        media_info = self.get_media_info(str(actual_path))
+                        resolution = media_info.get('resolution', '未知')
+                        if resolution != '未知':
+                            all_resolutions.add(resolution)
 
-                            downloaded_files.append({
-                                "filename": actual_path.name,  # 使用实际文件名
-                                "path": str(actual_path),      # 使用实际路径
-                                "size_mb": file_size_mb,
-                                "video_title": expected_file['title'],
-                            })
-                            logger.info(f"✅ 找到预期文件: {actual_path.name} ({file_size_mb:.2f}MB)")
-                        else:
-                            logger.warning(f"⚠️ 预期文件为空: {actual_path.name}")
-                    except Exception as e:
-                        logger.warning(f"⚠️ 无法检查预期文件: {actual_path.name}, 错误: {e}")
+                        downloaded_files.append({
+                            "filename": actual_path.name,  # 使用实际文件名
+                            "path": str(actual_path),      # 使用实际路径
+                            "size_mb": file_size_mb,
+                            "video_title": expected_file['title'],
+                        })
+                        logger.info(
+                            f"✅ 找到预期文件: {actual_path.name} ({file_size_mb:.2f}MB)")
+                    else:
+                        logger.warning(f"⚠️ 预期文件为空: {actual_path.name}")
+                except Exception as e:
+                    logger.warning(f"⚠️ 无法检查预期文件: {actual_path.name}, 错误: {e}")
 
             # 计算分辨率显示
-            resolution = ', '.join(sorted(all_resolutions)) if all_resolutions else '未知'
+            resolution = ', '.join(
+                sorted(all_resolutions)) if all_resolutions else '未知'
 
-            logger.info(f"📊 播放列表找到文件数量: {len(downloaded_files)}/{len(expected_files)}")
+            logger.info(
+                f"📊 播放列表找到文件数量: {len(downloaded_files)}/{len(expected_files)}")
             logger.info(f"📊 总大小: {total_size_mb:.2f}MB")
 
             return {
@@ -9689,8 +10219,6 @@ class VideoDownloader:
 
             logger.error(f"详细错误信息: {traceback.format_exc()}")
             return {"success": False, "error": str(e)}
-
-
 
     def _make_progress_bar(self, percent: float) -> str:
         """生成进度条"""
@@ -9765,7 +10293,8 @@ class VideoDownloader:
 
             # 创建播放列表目录名
             playlist_title = re.sub(
-                r'[\\/:*?"<>|]', "_", info.get("title", f"Playlist_{playlist_id}")
+                r'[\\/:*?"<>|]', "_", info.get("title",
+                                               f"Playlist_{playlist_id}")
             ).strip()
             # 根据设置决定文件夹名称格式
             if hasattr(self, 'bot') and hasattr(self.bot, 'youtube_id_tags') and self.bot.youtube_id_tags:
@@ -9821,7 +10350,8 @@ class VideoDownloader:
                             total_size_mb += file_size_mb
 
                             # 获取媒体信息
-                            media_info = self.get_media_info(str(expected_path))
+                            media_info = self.get_media_info(
+                                str(expected_path))
                             resolution = media_info.get('resolution', '未知')
                             if resolution != '未知':
                                 all_resolutions.add(resolution)
@@ -9832,13 +10362,17 @@ class VideoDownloader:
                                 "size_mb": file_size_mb,
                                 "video_title": title,
                             })
-                            logger.info(f"✅ 找到文件: {expected_filename} ({file_size_mb:.2f}MB)")
+                            logger.info(
+                                f"✅ 找到文件: {expected_filename} ({file_size_mb:.2f}MB)")
                         else:
-                            missing_files.append(f"{expected_file['index']}. {title}")
+                            missing_files.append(
+                                f"{expected_file['index']}. {title}")
                             logger.warning(f"⚠️ 文件为空: {expected_filename}")
                     except Exception as e:
-                        missing_files.append(f"{expected_file['index']}. {title}")
-                        logger.warning(f"⚠️ 无法检查文件: {expected_filename}, 错误: {e}")
+                        missing_files.append(
+                            f"{expected_file['index']}. {title}")
+                        logger.warning(
+                            f"⚠️ 无法检查文件: {expected_filename}, 错误: {e}")
                 else:
                     # 尝试智能匹配（处理格式代码等）
                     found = False
@@ -9846,19 +10380,24 @@ class VideoDownloader:
                         matching_files = list(playlist_path.glob(video_ext))
                         for file_path in matching_files:
                             actual_filename = file_path.name
-                            cleaned_actual = clean_filename_for_matching(actual_filename)
-                            cleaned_expected = clean_filename_for_matching(expected_filename)
+                            cleaned_actual = clean_filename_for_matching(
+                                actual_filename)
+                            cleaned_expected = clean_filename_for_matching(
+                                expected_filename)
 
                             if cleaned_actual == cleaned_expected:
                                 try:
                                     file_size = file_path.stat().st_size
                                     if file_size > 0:
-                                        file_size_mb = file_size / (1024 * 1024)
+                                        file_size_mb = file_size / \
+                                            (1024 * 1024)
                                         total_size_mb += file_size_mb
 
                                         # 获取媒体信息
-                                        media_info = self.get_media_info(str(file_path))
-                                        resolution = media_info.get('resolution', '未知')
+                                        media_info = self.get_media_info(
+                                            str(file_path))
+                                        resolution = media_info.get(
+                                            'resolution', '未知')
                                         if resolution != '未知':
                                             all_resolutions.add(resolution)
 
@@ -9868,7 +10407,8 @@ class VideoDownloader:
                                             "size_mb": file_size_mb,
                                             "video_title": title,
                                         })
-                                        logger.info(f"✅ 通过模糊匹配找到文件: {actual_filename} ({file_size_mb:.2f}MB)")
+                                        logger.info(
+                                            f"✅ 通过模糊匹配找到文件: {actual_filename} ({file_size_mb:.2f}MB)")
                                         found = True
                                         break
                                 except Exception as e:
@@ -9877,14 +10417,16 @@ class VideoDownloader:
                             break
 
                     if not found:
-                        missing_files.append(f"{expected_file['index']}. {title}")
+                        missing_files.append(
+                            f"{expected_file['index']}. {title}")
                         logger.warning(f"⚠️ 未找到文件: {expected_filename}")
 
             # 计算完成度
             total_videos = len(expected_files)
             downloaded_videos = len(existing_files)
             completion_rate = (
-                (downloaded_videos / total_videos) * 100 if total_videos > 0 else 0
+                (downloaded_videos / total_videos) *
+                100 if total_videos > 0 else 0
             )
 
             logger.info(
@@ -9896,7 +10438,8 @@ class VideoDownloader:
                 logger.info(f"✅ 播放列表已完整下载 ({completion_rate:.1f}%)")
 
                 # 计算分辨率信息
-                resolution = ', '.join(sorted(all_resolutions)) if all_resolutions else '未知'
+                resolution = ', '.join(
+                    sorted(all_resolutions)) if all_resolutions else '未知'
                 if existing_files:
                     try:
                         import subprocess
@@ -10012,7 +10555,8 @@ class VideoDownloader:
                 if config_path.exists():
                     with open(config_path, 'r', encoding='utf-8') as f:
                         config_data = json.load(f)
-                    actual_download_dir = config_data.get("base-directory", str(download_path))
+                    actual_download_dir = config_data.get(
+                        "base-directory", str(download_path))
                 else:
                     actual_download_dir = str(download_path)
                 logger.info(f"🎯 gallery-dl 实际下载目录: {actual_download_dir}")
@@ -10027,7 +10571,8 @@ class VideoDownloader:
             if actual_download_path.exists():
                 for file_path in actual_download_path.rglob("*"):
                     if file_path.is_file():
-                        relative_path = str(file_path.relative_to(actual_download_path))
+                        relative_path = str(
+                            file_path.relative_to(actual_download_path))
                         before_files.add(relative_path)
 
             logger.info(f"📊 下载前文件数量: {len(before_files)}")
@@ -10040,7 +10585,8 @@ class VideoDownloader:
                     if asyncio.iscoroutinefunction(message_updater):
                         await message_updater("🖼️ **图片下载中**\n📝 当前下载：准备中...\n🖼️ 已完成：0 张")
                     else:
-                        message_updater("🖼️ **图片下载中**\n📝 当前下载：准备中...\n🖼️ 已完成：0 张")
+                        message_updater(
+                            "🖼️ **图片下载中**\n📝 当前下载：准备中...\n🖼️ 已完成：0 张")
                 except Exception as e:
                     logger.warning(f"⚠️ 发送开始消息失败: {e}")
 
@@ -10107,7 +10653,8 @@ class VideoDownloader:
                 current_files = set()
                 for file_path in actual_download_path.rglob("*"):
                     if file_path.is_file():
-                        relative_path = str(file_path.relative_to(actual_download_path))
+                        relative_path = str(
+                            file_path.relative_to(actual_download_path))
                         current_files.add(relative_path)
 
                 logger.info(f"🔍 当前文件数量: {len(current_files)}")
@@ -10132,9 +10679,11 @@ class VideoDownloader:
                                     file_size = file_path.stat().st_size
                                     total_size_bytes += file_size
                                     file_formats.add(file_path.suffix.lower())
-                                    logger.info(f"✅ 找到下载文件: {relative_path} ({file_size} bytes)")
+                                    logger.info(
+                                        f"✅ 找到下载文件: {relative_path} ({file_size} bytes)")
                                 except OSError as e:
-                                    logger.warning(f"无法获取文件大小: {file_path} - {e}")
+                                    logger.warning(
+                                        f"无法获取文件大小: {file_path} - {e}")
                 else:
                     # 如果没有找到新文件，尝试查找最近修改的文件
                     logger.warning(f"⚠️ 没有找到新文件，尝试查找最近修改的文件...")
@@ -10149,7 +10698,8 @@ class VideoDownloader:
 
                         logger.info(f"🔍 最近5分钟内修改的文件数量: {len(recent_files)}")
                         if recent_files:
-                            logger.info(f"🔍 最近修改的文件示例: {[f.name for f in recent_files[:3]]}")
+                            logger.info(
+                                f"🔍 最近修改的文件示例: {[f.name for f in recent_files[:3]]}")
                             # 将这些最近修改的文件作为下载的文件
                             for file_path in recent_files:
                                 if file_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.mov', '.avi', '.mkv']:
@@ -10157,10 +10707,13 @@ class VideoDownloader:
                                     try:
                                         file_size = file_path.stat().st_size
                                         total_size_bytes += file_size
-                                        file_formats.add(file_path.suffix.lower())
-                                        logger.info(f"✅ 找到最近修改的文件: {file_path.name} ({file_size} bytes)")
+                                        file_formats.add(
+                                            file_path.suffix.lower())
+                                        logger.info(
+                                            f"✅ 找到最近修改的文件: {file_path.name} ({file_size} bytes)")
                                     except OSError as e:
-                                        logger.warning(f"无法获取文件大小: {file_path} - {e}")
+                                        logger.warning(
+                                            f"无法获取文件大小: {file_path} - {e}")
                     except Exception as e:
                         logger.error(f"❌ 查找最近修改文件时出错: {e}")
             else:
@@ -10173,7 +10726,8 @@ class VideoDownloader:
                 size_mb = total_size_bytes / (1024 * 1024)
 
                 # 格式化文件格式显示
-                format_str = ", ".join(sorted(file_formats)) if file_formats else "未知格式"
+                format_str = ", ".join(
+                    sorted(file_formats)) if file_formats else "未知格式"
 
                 # 生成详细的结果信息
                 result = {
@@ -10191,7 +10745,8 @@ class VideoDownloader:
                     "file_formats": list(file_formats)
                 }
 
-                logger.info(f"✅ gallery-dl 下载成功: {len(downloaded_files)} 个文件, 总大小: {size_mb:.1f} MB")
+                logger.info(
+                    f"✅ gallery-dl 下载成功: {len(downloaded_files)} 个文件, 总大小: {size_mb:.1f} MB")
                 return result
             else:
                 logger.warning(f"⚠️ 未找到新下载的文件，查找目录: {actual_download_dir}")
@@ -10271,14 +10826,16 @@ class VideoDownloader:
                 if download_path.exists():
                     for file_path in download_path.rglob("*"):
                         if file_path.is_file():
-                            relative_path = str(file_path.relative_to(download_path))
+                            relative_path = str(
+                                file_path.relative_to(download_path))
                             current_files.add(relative_path)
 
                 # 计算新文件数量
                 new_files = current_files - before_files
                 current_count = len(new_files)
 
-                logger.info(f"📊 当前文件数量: {len(current_files)}, 新文件数量: {current_count}")
+                logger.info(
+                    f"📊 当前文件数量: {len(current_files)}, 新文件数量: {current_count}")
                 if new_files:
                     logger.info(f"📊 新文件示例: {list(new_files)[:3]}")
 
@@ -10312,7 +10869,8 @@ class VideoDownloader:
                             await message_updater(progress_text)
                         else:
                             message_updater(progress_text)
-                        logger.info(f"📊 gallery-dl 进度更新: {current_count} 张图片, 当前文件: {current_file_path}")
+                        logger.info(
+                            f"📊 gallery-dl 进度更新: {current_count} 张图片, 当前文件: {current_file_path}")
                     except Exception as e:
                         logger.warning(f"⚠️ 更新进度消息失败: {e}")
                         # 不退出循环，继续监控
@@ -10363,8 +10921,6 @@ class VideoDownloader:
             cookies_path=self.x_cookies_path
         )
 
-
-
     async def _download_x_playlist(self, url: str, download_path: Path, message_updater=None, playlist_info: dict = None) -> Dict[str, Any]:
         """下载X播放列表中的所有视频"""
         import os
@@ -10401,7 +10957,8 @@ class VideoDownloader:
         def create_playlist_progress_callback(progress_data):
             def escape_num(text):
                 # 只转义MarkdownV2特殊字符，不转义小数点
-                special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+                special_chars = [
+                    '_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
                 for char in special_chars:
                     text = text.replace(char, f'\\{char}')
                 return text
@@ -10439,7 +10996,9 @@ class VideoDownloader:
 
                     # 创建进度消息
                     progress_bar = self._make_progress_bar(overall_percent)
-                    elapsed_time = time.time() - (progress_data['start_time'] if progress_data and isinstance(progress_data, dict) else time.time())
+                    elapsed_time = time.time() - \
+                        (progress_data['start_time'] if progress_data and isinstance(
+                            progress_data, dict) else time.time())
 
                     status_text = f"🎬 X播放列表下载进度\n"
                     status_text += f"📊 总体进度: {progress_bar} {overall_percent:.1f}%\n"
@@ -10529,7 +11088,8 @@ class VideoDownloader:
 
                 # 下载完成后检查并处理PART文件
                 logger.info("🔍 检查下载完成状态...")
-                resume_success = self._resume_failed_downloads(download_path, url, max_retries=5)
+                resume_success = self._resume_failed_downloads(
+                    download_path, url, max_retries=5)
 
                 if not resume_success:
                     logger.warning("⚠️ 部分文件下载未完成，但已达到最大重试次数")
@@ -10546,7 +11106,8 @@ class VideoDownloader:
 
             # 使用progress_data中记录的文件列表来检测下载的文件
             video_files = []
-            downloaded_files = progress_data.get('downloaded_files', []) if progress_data and isinstance(progress_data, dict) else []
+            downloaded_files = progress_data.get(
+                'downloaded_files', []) if progress_data and isinstance(progress_data, dict) else []
             logger.info(f"📊 progress_data中记录的文件: {downloaded_files}")
 
             # 首先尝试使用progress_data中记录的文件
@@ -10554,7 +11115,8 @@ class VideoDownloader:
                 for filename in downloaded_files:
                     file_path = download_path / filename
                     if file_path.exists():
-                        video_files.append((file_path, os.path.getmtime(file_path)))
+                        video_files.append(
+                            (file_path, os.path.getmtime(file_path)))
                         logger.info(f"✅ 找到本次下载文件: {filename}")
                     else:
                         logger.warning(f"⚠️ 文件不存在: {filename}")
@@ -10568,7 +11130,8 @@ class VideoDownloader:
                         # 如果文件修改时间在下载开始时间之后，认为是本次下载的文件
                         if mtime >= download_start_time:
                             video_files.append((file, mtime))
-                            logger.info(f"✅ 找到本次下载文件: {file.name}, 修改时间: {mtime}")
+                            logger.info(
+                                f"✅ 找到本次下载文件: {file.name}, 修改时间: {mtime}")
                     except OSError:
                         continue
 
@@ -10608,8 +11171,10 @@ class VideoDownloader:
                     })
 
                 filename_list = [info['filename'] for info in file_info_list]
-                filename_display = '\n'.join([f"  {i+1:02d}. {name}" for i, name in enumerate(filename_list)])
-                resolution_display = ', '.join(sorted(all_resolutions)) if all_resolutions else '未知'
+                filename_display = '\n'.join(
+                    [f"  {i+1:02d}. {name}" for i, name in enumerate(filename_list)])
+                resolution_display = ', '.join(
+                    sorted(all_resolutions)) if all_resolutions else '未知'
 
                 return {
                     'success': True,
@@ -10638,7 +11203,8 @@ class VideoDownloader:
             # 记录下载完成时间
             download_end_time = time.time()
             total_time = download_end_time - download_start_time
-            logger.info(f"⏰ 下载完成时间: {download_end_time}, 总用时: {total_time:.1f}秒")
+            logger.info(
+                f"⏰ 下载完成时间: {download_end_time}, 总用时: {total_time:.1f}秒")
 
     async def _download_x_image_with_gallerydl(self, url: str, message: types.Message) -> dict:
         """使用 gallery-dl 下载 X 图片，遇到NSFW错误时fallback到yt-dlp"""
@@ -10694,29 +11260,27 @@ class VideoDownloader:
                 "content_type": "image"
             }
 
-
-
     async def _download_xiaohongshu_image_with_downloader(self, url: str, message_updater=None) -> dict:
         """使用 xiaohongshu_downloader.py 下载小红书图片"""
         try:
             # 导入小红书下载器
             from xiaohongshu_downloader import XiaohongshuDownloader
-            
+
             # 创建下载器实例
             downloader = XiaohongshuDownloader()
-            
+
             # 小红书图片下载目录
             download_dir = str(self.xiaohongshu_download_path)
             os.makedirs(download_dir, exist_ok=True)
-            
+
             logger.info(f"🖼️ 使用 xiaohongshu_downloader 下载小红书图片: {url}")
-            
+
             # 创建进度回调函数
             async def progress_callback(text):
                 if message_updater:
                     try:
                         logger.info(f"📱 小红书进度回调收到消息: {text}")
-                        
+
                         # 检查消息类型，区分开始下载、进度更新和完成消息
                         if "🚀 开始下载" in text:
                             logger.info("🚀 检测到开始下载消息")
@@ -10724,9 +11288,9 @@ class VideoDownloader:
                             logger.info("✅ 检测到下载完成消息")
                         elif "📊 进度:" in text:
                             logger.info("📊 检测到进度更新消息")
-                        
+
                         # 移除跳过完成消息的逻辑，让xiaohongshu_downloader的完成消息正常显示
-                        
+
                         # 检查是否为异步函数
                         if asyncio.iscoroutinefunction(message_updater):
                             # 异步函数，直接await调用
@@ -10738,10 +11302,11 @@ class VideoDownloader:
                         logger.warning(f"⚠️ 进度回调失败: {e}")
                         import traceback
                         logger.warning(f"⚠️ 异常堆栈: {traceback.format_exc()}")
-            
+
             # 调用下载器
-            result = downloader.download_note(url, download_dir, progress_callback)
-            
+            result = downloader.download_note(
+                url, download_dir, progress_callback)
+
             if result.get("success"):
                 logger.info(f"✅ 小红书图片下载成功: {result}")
                 # 从files中提取文件格式
@@ -10750,11 +11315,12 @@ class VideoDownloader:
                 for file_info in files:
                     file_path = file_info.get('path', '')
                     if file_path:
-                        ext = os.path.splitext(file_path)[1].lower().lstrip('.')
+                        ext = os.path.splitext(file_path)[
+                            1].lower().lstrip('.')
                         if ext:
                             file_formats.add(ext.upper())
                 file_formats = list(file_formats)
-                
+
                 return {
                     "success": True,
                     "title": result.get("title", "小红书图片"),
@@ -10775,7 +11341,7 @@ class VideoDownloader:
                     "platform": "Xiaohongshu",
                     "content_type": "image"
                 }
-                
+
         except Exception as e:
             logger.error(f"❌ 下载小红书图片失败: {e}")
             return {
@@ -10888,6 +11454,7 @@ class VideoDownloader:
 
                 # 监听网络请求，捕获小红书视频URL
                 video_url_holder = {'url': None}
+
                 def handle_request(request):
                     req_url = request.url
                     if any(ext in req_url.lower() for ext in ['.mp4', '.m3u8']):
@@ -10895,7 +11462,8 @@ class VideoDownloader:
                             # 只保存第一个捕获到的视频URL，避免被后续请求覆盖
                             if not video_url_holder['url']:
                                 video_url_holder['url'] = req_url
-                                logger.info(f"[cat-catch] 嗅探到小红书视频流: {req_url}")
+                                logger.info(
+                                    f"[cat-catch] 嗅探到小红书视频流: {req_url}")
                 page.on("request", handle_request)
 
                 # 访问页面 - 参考douyin.py的实现
@@ -10906,7 +11474,8 @@ class VideoDownloader:
                 # 极速嗅探：只监听network，不做任何交互 - 参考douyin.py
                 for _ in range(5):  # 1.5秒内监听
                     if video_url_holder['url']:
-                        logger.info(f"[cat-catch][fast] 极速嗅探到小红书视频流: {video_url_holder['url']}")
+                        logger.info(
+                            f"[cat-catch][fast] 极速嗅探到小红书视频流: {video_url_holder['url']}")
                         # 立即获取标题和作者，参考douyin.py
                         title = await self._get_video_title(page, platform)
                         author = await self._get_video_author(page, platform)
@@ -10933,7 +11502,8 @@ class VideoDownloader:
                 if not video_url_holder['url']:
                     logger.warning(f"⚠️ 网络嗅探未捕获到小红书视频流")
                 else:
-                    logger.info(f"✅ 网络嗅探成功捕获到小红书视频流: {video_url_holder['url']}")
+                    logger.info(
+                        f"✅ 网络嗅探成功捕获到小红书视频流: {video_url_holder['url']}")
 
                 # 如果网络嗅探失败，尝试从页面提取
                 if not video_url_holder['url']:
@@ -10954,14 +11524,16 @@ class VideoDownloader:
                     for i, pattern in enumerate(patterns):
                         m = re.search(pattern, html)
                         if m:
-                            url = m.group(1).replace('\\u002F', '/').replace('\\u0026', '&')
+                            url = m.group(1).replace(
+                                '\\u002F', '/').replace('\\u0026', '&')
                             # 验证URL是否有效，并且网络嗅探没有捕获到URL时才使用
                             if self._is_valid_xiaohongshu_url(url) and not video_url_holder['url']:
                                 video_url_holder['url'] = url
                                 logger.info(f"✅ 使用模式{i+1}提取到小红书视频URL: {url}")
                                 break
                             elif self._is_valid_xiaohongshu_url(url) and video_url_holder['url']:
-                                logger.info(f"⚠️ 网络嗅探已捕获到URL，跳过HTML提取的URL: {url}")
+                                logger.info(
+                                    f"⚠️ 网络嗅探已捕获到URL，跳过HTML提取的URL: {url}")
                                 break
 
                 # 如果HTML提取成功，获取标题和作者
@@ -10987,7 +11559,8 @@ class VideoDownloader:
                     try:
                         with open(debug_html_path, 'w', encoding='utf-8') as f:
                             f.write(html)
-                        logger.error(f"❌ 无法提取小红书视频直链，已保存调试HTML到: {debug_html_path}")
+                        logger.error(
+                            f"❌ 无法提取小红书视频直链，已保存调试HTML到: {debug_html_path}")
                     except Exception as e:
                         logger.error(f"❌ 无法提取小红书视频直链，保存调试文件失败: {e}")
 
@@ -11045,12 +11618,14 @@ class VideoDownloader:
             logger.info(f"[extract] HTML长度: {len(html)} 字符")
 
             # 查找包含视频数据的script标签
-            script_matches = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
+            script_matches = re.findall(
+                r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
 
             for script_content in script_matches:
                 if 'aweme_id' in script_content and 'status_code' in script_content:
                     # 尝试提取JSON部分
-                    json_matches = re.findall(r'({.*?"errors":\s*null\s*})', script_content, re.DOTALL)
+                    json_matches = re.findall(
+                        r'({.*?"errors":\s*null\s*})', script_content, re.DOTALL)
                     for json_str in json_matches:
                         try:
                             # 清理JSON
@@ -11075,49 +11650,59 @@ class VideoDownloader:
                                         for key, value in obj.items():
                                             # 专门查找video字段
                                             if key == "video" and isinstance(value, dict):
-                                                logger.info(f"[extract] 找到video字段: {list(value.keys())}")
+                                                logger.info(
+                                                    f"[extract] 找到video字段: {list(value.keys())}")
 
                                                 # 优先查找play_url字段（无水印）
                                                 if "play_url" in value:
                                                     play_url = value["play_url"]
-                                                    logger.info(f"[extract] play_url字段内容: {play_url}")
-                                                    logger.info(f"[extract] play_url类型: {type(play_url)}")
+                                                    logger.info(
+                                                        f"[extract] play_url字段内容: {play_url}")
+                                                    logger.info(
+                                                        f"[extract] play_url类型: {type(play_url)}")
                                                     # 处理play_url字典格式
                                                     if isinstance(play_url, dict) and "url_list" in play_url:
                                                         url_list = play_url["url_list"]
                                                         if isinstance(url_list, list) and url_list:
                                                             video_url = url_list[0]
                                                             if video_url.startswith("http"):
-                                                                logger.info(f"[extract] 从play_url.url_list找到无水印视频URL: {video_url}")
+                                                                logger.info(
+                                                                    f"[extract] 从play_url.url_list找到无水印视频URL: {video_url}")
                                                                 return video_url
                                                     # 处理play_url字符串格式
                                                     elif isinstance(play_url, str) and play_url.startswith("http"):
                                                         if any(ext in play_url.lower() for ext in [".mp4", ".m3u8", ".ts", "douyinvod.com", "snssdk.com"]):
-                                                            logger.info(f"[extract] 找到无水印视频URL: {play_url}")
+                                                            logger.info(
+                                                                f"[extract] 找到无水印视频URL: {play_url}")
                                                             return play_url
 
                                                 # 兜底：如果没有play_url，再查找play_addr字段（有水印）
                                                 if "play_addr" in value:
                                                     play_addr = value["play_addr"]
-                                                    logger.info(f"[extract] play_addr字段内容: {play_addr}")
-                                                    logger.info(f"[extract] play_addr类型: {type(play_addr)}")
+                                                    logger.info(
+                                                        f"[extract] play_addr字段内容: {play_addr}")
+                                                    logger.info(
+                                                        f"[extract] play_addr类型: {type(play_addr)}")
                                                     # 处理play_addr字典格式
                                                     if isinstance(play_addr, dict) and "url_list" in play_addr:
                                                         url_list = play_addr["url_list"]
                                                         if isinstance(url_list, list) and url_list:
                                                             video_url = url_list[0]
                                                             if video_url.startswith("http"):
-                                                                logger.info(f"[extract] 从play_addr.url_list找到有水印视频URL: {video_url}")
+                                                                logger.info(
+                                                                    f"[extract] 从play_addr.url_list找到有水印视频URL: {video_url}")
                                                                 return video_url
                                                     # 查找playAddr
                                                     if isinstance(play_addr, list) and play_addr:
                                                         video_url = play_addr[0]
                                                         if video_url.startswith("http") and any(ext in video_url.lower() for ext in [".mp4", ".m3u8", ".ts", "douyinvod.com", "snssdk.com"]):
-                                                            logger.info(f"[extract] 找到有水印视频URL: {video_url}")
+                                                            logger.info(
+                                                                f"[extract] 找到有水印视频URL: {video_url}")
                                                             return video_url
                                                     elif isinstance(play_addr, str) and play_addr.startswith("http"):
                                                         if any(ext in play_addr.lower() for ext in [".mp4", ".m3u8", ".ts", "douyinvod.com", "snssdk.com"]):
-                                                            logger.info(f"[extract] 找到有水印视频URL: {play_addr}")
+                                                            logger.info(
+                                                                f"[extract] 找到有水印视频URL: {play_addr}")
                                                             return play_addr
                                             elif isinstance(value, (dict, list)):
                                                 result = find_video_url(value)
@@ -11177,12 +11762,15 @@ class VideoDownloader:
                             )
                             if head_resp.status_code in [200, 206]:
                                 # 检查content-length，如果为0则认为API失效
-                                content_length = int(head_resp.headers.get("content-length", 0))
+                                content_length = int(
+                                    head_resp.headers.get("content-length", 0))
                                 if content_length > 0:
-                                    logger.info(f"[douyin_api] HEAD请求成功: {api_url} (大小: {content_length})")
+                                    logger.info(
+                                        f"[douyin_api] HEAD请求成功: {api_url} (大小: {content_length})")
                                     return api_url
                                 else:
-                                    logger.warning(f"[douyin_api] HEAD请求成功但content-length为0: {api_url}")
+                                    logger.warning(
+                                        f"[douyin_api] HEAD请求成功但content-length为0: {api_url}")
                                     return None
                         except Exception:
                             pass  # HEAD 失败就用 GET 试试
@@ -11194,12 +11782,15 @@ class VideoDownloader:
                             timeout=3.0
                         )
                         if resp.status_code in [200, 206]:
-                            content_length = int(resp.headers.get("content-length", 0))
+                            content_length = int(
+                                resp.headers.get("content-length", 0))
                             if content_length > 0:
-                                logger.info(f"[douyin_api] GET请求成功: {api_url} (大小: {content_length})")
+                                logger.info(
+                                    f"[douyin_api] GET请求成功: {api_url} (大小: {content_length})")
                                 return api_url
                             else:
-                                logger.warning(f"[douyin_api] GET请求成功但content-length为0: {api_url}")
+                                logger.warning(
+                                    f"[douyin_api] GET请求成功但content-length为0: {api_url}")
                                 return None
 
                 except Exception as e:
@@ -11220,12 +11811,14 @@ class VideoDownloader:
                             logger.info(f"[douyin_api] 找到可用API: {url}")
                             return url
 
-                    logger.warning(f"[douyin_api] 第{attempt + 1}次尝试所有API都返回0字节")
+                    logger.warning(
+                        f"[douyin_api] 第{attempt + 1}次尝试所有API都返回0字节")
                     if attempt < 1:  # 如果不是最后一次重试
                         await asyncio.sleep(1)  # 等待1秒后重试
 
                 except Exception as e:
-                    logger.error(f"[douyin_api] 第{attempt + 1}次尝试发生错误: {str(e)}")
+                    logger.error(
+                        f"[douyin_api] 第{attempt + 1}次尝试发生错误: {str(e)}")
                     if attempt < 1:
                         await asyncio.sleep(1)
 
@@ -11261,7 +11854,8 @@ class VideoDownloader:
             html = await page.content()
 
             # 查找包含视频信息的script标签
-            script_matches = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
+            script_matches = re.findall(
+                r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
             for script_content in script_matches:
                 if 'caption' in script_content or 'title' in script_content:
                     # 尝试提取JSON中的标题字段
@@ -11277,13 +11871,14 @@ class VideoDownloader:
                         matches = re.findall(pattern, script_content)
                         for match in matches:
                             # 清理和验证标题
-                            title = match.replace('\\u002F', '/').replace('\\u0026', '&').replace('\\n', ' ').replace('\\', '')
+                            title = match.replace(
+                                '\\u002F', '/').replace('\\u0026', '&').replace('\\n', ' ').replace('\\', '')
                             title = title.strip()
                             # 过滤掉明显不是标题的内容
                             if (len(title) > 5 and len(title) < 200 and
                                 not title.startswith('http') and
                                 not all(c.isdigit() or c in '.-_' for c in title) and
-                                '快手' not in title and 'kuaishou' not in title.lower()):
+                                    '快手' not in title and 'kuaishou' not in title.lower()):
                                 logger.info(f"📝 从JSON提取到快手标题: {title}")
                                 return re.sub(r'[<>:"/\\|?*]', '_', title)[:100]
 
@@ -11306,7 +11901,7 @@ class VideoDownloader:
                         if text and len(text.strip()) > 5 and len(text.strip()) < 200:
                             title = text.strip()
                             if (not title.startswith('http') and
-                                not all(c.isdigit() or c in '.-_' for c in title)):
+                                    not all(c.isdigit() or c in '.-_' for c in title)):
                                 logger.info(f"📝 从元素{selector}提取到快手标题: {title}")
                                 return re.sub(r'[<>:"/\\|?*]', '_', title)[:100]
                 except:
@@ -11318,7 +11913,8 @@ class VideoDownloader:
                 title = page_title.strip()
                 # 去除快手相关的后缀
                 title = re.sub(r'[-_\s]*快手[-_\s]*', '', title)
-                title = re.sub(r'[-_\s]*kuaishou[-_\s]*', '', title, flags=re.IGNORECASE)
+                title = re.sub(r'[-_\s]*kuaishou[-_\s]*', '',
+                               title, flags=re.IGNORECASE)
                 title = re.sub(r'[-_\s]*短视频[-_\s]*', '', title)
                 title = title.strip()
                 if len(title) > 3:
@@ -11361,7 +11957,8 @@ class VideoDownloader:
             html = await page.content()
 
             # 查找包含用户信息的script标签
-            script_matches = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
+            script_matches = re.findall(
+                r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
             for script_content in script_matches:
                 if 'user' in script_content or 'author' in script_content:
                     # 尝试提取JSON中的作者字段
@@ -11378,13 +11975,14 @@ class VideoDownloader:
                         matches = re.findall(pattern, script_content)
                         for match in matches:
                             # 清理和验证作者名
-                            author = match.replace('\\u002F', '/').replace('\\u0026', '&').replace('\\', '')
+                            author = match.replace(
+                                '\\u002F', '/').replace('\\u0026', '&').replace('\\', '')
                             author = author.strip()
                             # 过滤掉明显不是作者名的内容
                             if (len(author) > 1 and len(author) < 50 and
                                 not author.startswith('http') and
                                 not all(c.isdigit() or c in '.-_' for c in author) and
-                                author not in ['null', 'undefined', 'true', 'false']):
+                                    author not in ['null', 'undefined', 'true', 'false']):
                                 logger.info(f"👤 从JSON提取到快手作者: {author}")
                                 return re.sub(r'[<>:"/\\|?*]', '_', author)[:30]
 
@@ -11408,8 +12006,9 @@ class VideoDownloader:
                         if text and len(text.strip()) > 1 and len(text.strip()) < 50:
                             author = text.strip()
                             if (not author.startswith('http') and
-                                not all(c.isdigit() or c in '.-_' for c in author)):
-                                logger.info(f"👤 从元素{selector}提取到快手作者: {author}")
+                                    not all(c.isdigit() or c in '.-_' for c in author)):
+                                logger.info(
+                                    f"👤 从元素{selector}提取到快手作者: {author}")
                                 return re.sub(r'[<>:"/\\|?*]', '_', author)[:30]
                 except:
                     continue
@@ -11521,7 +12120,8 @@ class VideoDownloader:
                 # 尝试加载cookies（如果存在）
                 if self.douyin_cookies_path and os.path.exists(self.douyin_cookies_path):
                     try:
-                        cookies_dict = self._parse_douyin_cookies_file(self.douyin_cookies_path)
+                        cookies_dict = self._parse_douyin_cookies_file(
+                            self.douyin_cookies_path)
                         cookies = []
                         for name, value in cookies_dict.items():
                             cookies.append({
@@ -11545,7 +12145,8 @@ class VideoDownloader:
                         m = re.search(r'video_id=([a-zA-Z0-9]+)', request_url)
                         if m:
                             video_id_holder['id'] = m.group(1)
-                            logger.info(f"[extract] 网络请求中捕获到 video_id: {m.group(1)}")
+                            logger.info(
+                                f"[extract] 网络请求中捕获到 video_id: {m.group(1)}")
                 page.on("request", handle_video_id)
 
                 try:
@@ -11588,13 +12189,15 @@ class VideoDownloader:
                     video_id_match = re.search(r'/video/(\d+)', current_url)
                     if video_id_match:
                         video_id_holder['id'] = video_id_match.group(1)
-                        logger.info(f"[extract] 从当前URL直接提取到 video_id: {video_id_holder['id']}")
+                        logger.info(
+                            f"[extract] 从当前URL直接提取到 video_id: {video_id_holder['id']}")
                     else:
                         # 如果当前URL提取失败，从原始URL提取
                         video_id_match = re.search(r'/video/(\d+)', url)
                         if video_id_match:
                             video_id_holder['id'] = video_id_match.group(1)
-                            logger.info(f"[extract] 从原始URL提取到 video_id: {video_id_holder['id']}")
+                            logger.info(
+                                f"[extract] 从原始URL提取到 video_id: {video_id_holder['id']}")
 
                     # 按照douyin.py：抖音先等2秒
                     await asyncio.sleep(2)
@@ -11606,17 +12209,20 @@ class VideoDownloader:
                         if video_id_holder['id']:
                             break
                         await asyncio.sleep(0.1)
-                    logger.info(f"[extract] video_id 等待用时: {time.time() - wait_start:.2f}s")
+                    logger.info(
+                        f"[extract] video_id 等待用时: {time.time() - wait_start:.2f}s")
 
                     # 如果还没有video_id，最后一次尝试从URL提取
                     if not video_id_holder['id']:
                         logger.info("[extract] 网络监听未捕获到video_id，尝试从URL直接提取")
                         # 尝试从各种可能的URL格式中提取
                         for test_url in [current_url, url]:
-                            video_id_match = re.search(r'/video/(\d+)', test_url)
+                            video_id_match = re.search(
+                                r'/video/(\d+)', test_url)
                             if video_id_match:
                                 video_id_holder['id'] = video_id_match.group(1)
-                                logger.info(f"[extract] 从URL直接提取到 video_id: {video_id_holder['id']} (来源: {test_url})")
+                                logger.info(
+                                    f"[extract] 从URL直接提取到 video_id: {video_id_holder['id']} (来源: {test_url})")
                                 break
 
                     video_url = None
@@ -11637,8 +12243,10 @@ class VideoDownloader:
                         # 如果是带水印的URL，尝试转换为无水印URL
                         if 'playwm' in video_url:
                             logger.info("[extract] 检测到带水印URL，尝试转换为无水印URL")
-                            no_watermark_url = video_url.replace('playwm', 'play')
-                            logger.info(f"[extract] 转换后的无水印URL: {no_watermark_url}")
+                            no_watermark_url = video_url.replace(
+                                'playwm', 'play')
+                            logger.info(
+                                f"[extract] 转换后的无水印URL: {no_watermark_url}")
                             video_url = no_watermark_url
                         # 验证URL有效性
                         is_valid = False
@@ -11659,7 +12267,8 @@ class VideoDownloader:
                             is_valid = is_valid_video_url(video_url)
                         else:
                             # 通用验证
-                            is_valid = any(ext in video_url.lower() for ext in ['.mp4', '.m3u8', '.ts', '.flv', '.webm'])
+                            is_valid = any(ext in video_url.lower() for ext in [
+                                           '.mp4', '.m3u8', '.ts', '.flv', '.webm'])
 
                         if is_valid:
                             logger.info(f"[extract] 正则流程命中: {video_url}")
@@ -11796,7 +12405,8 @@ class VideoDownloader:
                 # 尝试加载cookies（如果存在）
                 if self.kuaishou_cookies_path and os.path.exists(self.kuaishou_cookies_path):
                     try:
-                        cookies_dict = self._parse_kuaishou_cookies_file(self.kuaishou_cookies_path)
+                        cookies_dict = self._parse_kuaishou_cookies_file(
+                            self.kuaishou_cookies_path)
                         cookies = []
                         for name, value in cookies_dict.items():
                             cookies.append({
@@ -11820,7 +12430,8 @@ class VideoDownloader:
                     m = re.search(r'photoId[=:]([a-zA-Z0-9_-]+)', req_url)
                     if m and not video_id_holder['id']:
                         video_id_holder['id'] = m.group(1)
-                        logger.info(f"[extract] 网络请求中捕获到快手 photo_id: {m.group(1)}")
+                        logger.info(
+                            f"[extract] 网络请求中捕获到快手 photo_id: {m.group(1)}")
 
                     # 监听视频文件请求 - 改进过滤逻辑
                     if not video_url_holder['url']:
@@ -11844,7 +12455,8 @@ class VideoDownloader:
 
                         if is_video_request:
                             video_url_holder['url'] = req_url
-                            logger.info(f"[extract] 网络请求中捕获到快手视频URL: {req_url}")
+                            logger.info(
+                                f"[extract] 网络请求中捕获到快手视频URL: {req_url}")
                         elif any(pattern in req_url.lower() for pattern in exclude_patterns):
                             logger.debug(f"[extract] 跳过非视频请求: {req_url}")
 
@@ -11888,7 +12500,8 @@ class VideoDownloader:
                                 play_button = await page.query_selector(selector)
                                 if play_button:
                                     await play_button.click()
-                                    logger.info(f"[extract] 点击了播放按钮: {selector}")
+                                    logger.info(
+                                        f"[extract] 点击了播放按钮: {selector}")
                                     await asyncio.sleep(2)
                                     break
                             except:
@@ -11911,10 +12524,12 @@ class VideoDownloader:
 
                     # 尝试从URL中提取photo_id
                     if not video_id_holder['id']:
-                        photo_id_match = re.search(r'/short-video/([a-zA-Z0-9_-]+)', url)
+                        photo_id_match = re.search(
+                            r'/short-video/([a-zA-Z0-9_-]+)', url)
                         if photo_id_match:
                             video_id_holder['id'] = photo_id_match.group(1)
-                            logger.info(f"[extract] 从URL提取到快手 photo_id: {video_id_holder['id']}")
+                            logger.info(
+                                f"[extract] 从URL提取到快手 photo_id: {video_id_holder['id']}")
 
                     # 优先使用网络监听捕获的视频URL
                     video_url = video_url_holder['url']
@@ -11935,14 +12550,16 @@ class VideoDownloader:
 
                         # 创建视频信息对象
                         video_info = VideoInfo(
-                            video_id=video_id_holder['id'] or str(int(time.time())),
+                            video_id=video_id_holder['id'] or str(
+                                int(time.time())),
                             title=title or f"快手视频_{int(time.time())}",
                             author=author or "未知作者",
                             download_url=video_url,
                             platform="kuaishou"
                         )
 
-                        logger.info(f"[extract] 快手视频信息: 标题={video_info.title}, 作者={video_info.author}")
+                        logger.info(
+                            f"[extract] 快手视频信息: 标题={video_info.title}, 作者={video_info.author}")
                         logger.info("[extract] 正则流程完成")
 
                         # 下载视频
@@ -12007,7 +12624,8 @@ class VideoDownloader:
                 for keyword in keywords:
                     count = html.lower().count(keyword)
                     if count > 0:
-                        logger.info(f"[extract] HTML中包含 '{keyword}': {count} 次")
+                        logger.info(
+                            f"[extract] HTML中包含 '{keyword}': {count} 次")
 
             except Exception as e:
                 logger.warning(f"[extract] 保存HTML调试文件失败: {e}")
@@ -12039,17 +12657,20 @@ class VideoDownloader:
                 if matches:
                     for match in matches:
                         # 清理URL
-                        video_url = match.replace('\\u002F', '/').replace('\\u0026', '&').replace('\\/', '/').replace('\\', '')
+                        video_url = match.replace(
+                            '\\u002F', '/').replace('\\u0026', '&').replace('\\/', '/').replace('\\', '')
                         # 验证URL格式
                         if (video_url.startswith('http') and
                             ('.mp4' in video_url or 'kwaicdn.com' in video_url or 'kuaishou.com' in video_url) and
-                            len(video_url) > 20):  # 基本长度检查
-                            logger.info(f"[extract] 快手模式{i+1}找到视频URL: {video_url}")
+                                len(video_url) > 20):  # 基本长度检查
+                            logger.info(
+                                f"[extract] 快手模式{i+1}找到视频URL: {video_url}")
                             return video_url
 
             # 如果正则都失败，尝试查找script标签中的JSON数据
             logger.info("[extract] 正则模式失败，尝试解析script标签中的JSON")
-            script_matches = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
+            script_matches = re.findall(
+                r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
             for script_content in script_matches:
                 if 'mp4' in script_content or 'video' in script_content.lower():
                     # 尝试从script中提取视频URL
@@ -12061,11 +12682,13 @@ class VideoDownloader:
                     for pattern in video_patterns:
                         matches = re.findall(pattern, script_content)
                         for match in matches:
-                            video_url = match.replace('\\u002F', '/').replace('\\u0026', '&').replace('\\/', '/').replace('\\', '')
+                            video_url = match.replace(
+                                '\\u002F', '/').replace('\\u0026', '&').replace('\\/', '/').replace('\\', '')
                             if (video_url.startswith('http') and
                                 ('.mp4' in video_url or 'kwaicdn.com' in video_url) and
-                                len(video_url) > 20):
-                                logger.info(f"[extract] 从script标签找到视频URL: {video_url}")
+                                    len(video_url) > 20):
+                                logger.info(
+                                    f"[extract] 从script标签找到视频URL: {video_url}")
                                 return video_url
 
             logger.warning("[extract] 所有快手正则模式都未匹配到视频URL")
@@ -12075,7 +12698,8 @@ class VideoDownloader:
                 mp4_contexts = []
                 for match in re.finditer(r'.{0,50}mp4.{0,50}', html, re.IGNORECASE):
                     mp4_contexts.append(match.group())
-                logger.info(f"[extract] HTML中包含mp4的上下文: {mp4_contexts[:3]}")  # 只显示前3个
+                logger.info(
+                    f"[extract] HTML中包含mp4的上下文: {mp4_contexts[:3]}")  # 只显示前3个
 
             return None
 
@@ -12103,7 +12727,8 @@ class VideoDownloader:
                     # 其他平台保持原有逻辑
                     clean_title = re.split(r'#', clean_title)[0].strip()
                 # 去除平台后缀
-                clean_title = re.sub(r'[-_ ]*(抖音|快手|小红书|YouTube|youtube)$', '', clean_title, flags=re.IGNORECASE).strip()
+                clean_title = re.sub(
+                    r'[-_ ]*(抖音|快手|小红书|YouTube|youtube)$', '', clean_title, flags=re.IGNORECASE).strip()
                 filename = f"{clean_title}.mp4"
             else:
                 # 如果获取标题失败，使用时间戳
@@ -12132,11 +12757,14 @@ class VideoDownloader:
                             logger.info(f"📊 文件大小: {total} bytes")
 
                             if resp.status_code != 200:
-                                logger.error(f"❌ HTTP状态码错误: {resp.status_code}")
+                                logger.error(
+                                    f"❌ HTTP状态码错误: {resp.status_code}")
                                 # 读取错误响应内容
                                 error_content = await resp.aread()
-                                logger.error(f"❌ 错误响应内容: {error_content[:500]}")
-                                raise Exception(f"HTTP状态码错误: {resp.status_code}")
+                                logger.error(
+                                    f"❌ 错误响应内容: {error_content[:500]}")
+                                raise Exception(
+                                    f"HTTP状态码错误: {resp.status_code}")
 
                             with open(file_path, "wb") as f:
                                 downloaded = 0
@@ -12151,7 +12779,8 @@ class VideoDownloader:
                                         progress = downloaded / total * 100
                                     else:
                                         # 如果没有content-length，使用下载的字节数作为进度指示
-                                        progress = min(downloaded / (1024 * 1024), 99)  # 假设至少1MB
+                                        progress = min(
+                                            downloaded / (1024 * 1024), 99)  # 假设至少1MB
 
                                     # 计算速度（每秒更新一次）
                                     current_time = time.time()
@@ -12160,7 +12789,8 @@ class VideoDownloader:
                                         self._last_downloaded = 0
 
                                     if current_time - self._last_update_time >= 1.0:
-                                        speed = (downloaded - self._last_downloaded) / (current_time - self._last_update_time)
+                                        speed = (
+                                            downloaded - self._last_downloaded) / (current_time - self._last_update_time)
                                         self._last_update_time = current_time
                                         self._last_downloaded = downloaded
                                     else:
@@ -12196,8 +12826,10 @@ class VideoDownloader:
                                                         loop = asyncio.get_event_loop()
                                                     except RuntimeError:
                                                         loop = asyncio.new_event_loop()
-                                                        asyncio.set_event_loop(loop)
-                                                asyncio.run_coroutine_threadsafe(message_updater(progress_data), loop)
+                                                        asyncio.set_event_loop(
+                                                            loop)
+                                                asyncio.run_coroutine_threadsafe(
+                                                    message_updater(progress_data), loop)
                                             else:
                                                 # 同步函数，直接调用
                                                 message_updater(progress_data)
@@ -12205,7 +12837,8 @@ class VideoDownloader:
                                             logger.warning(f"⚠️ 更新进度失败: {e}")
 
                                 # 下载完成后的最终更新
-                                logger.info(f"✅ 小红书视频下载完成: {downloaded} bytes @{video_info.download_url}")
+                                logger.info(
+                                    f"✅ 小红书视频下载完成: {downloaded} bytes @{video_info.download_url}")
                                 if message_updater:
                                     try:
                                         final_progress_data = {
@@ -12226,7 +12859,8 @@ class VideoDownloader:
                 cookies_dict = {}
                 if video_info.platform == 'douyin' and self.douyin_cookies_path and os.path.exists(self.douyin_cookies_path):
                     try:
-                        cookies_dict = self._parse_douyin_cookies_file(self.douyin_cookies_path)
+                        cookies_dict = self._parse_douyin_cookies_file(
+                            self.douyin_cookies_path)
                         logger.info(f"📊 加载了{len(cookies_dict)}个cookies用于下载")
                     except Exception as e:
                         logger.warning(f"⚠️ 加载cookies失败: {e}")
@@ -12258,7 +12892,8 @@ class VideoDownloader:
                             logger.info(f"📊 响应头: {dict(resp.headers)}")
 
                             if resp.status_code != 200:
-                                raise Exception(f"HTTP状态码错误: {resp.status_code}")
+                                raise Exception(
+                                    f"HTTP状态码错误: {resp.status_code}")
 
                             async for chunk in resp.aiter_bytes(chunk_size=chunk_size):
                                 if not chunk:
@@ -12272,11 +12907,13 @@ class VideoDownloader:
                                     progress = downloaded / total * 100
                                 else:
                                     # 如果没有content-length，使用下载的字节数作为进度指示
-                                    progress = min(downloaded / (1024 * 1024), 99)  # 假设至少1MB
+                                    progress = min(
+                                        downloaded / (1024 * 1024), 99)  # 假设至少1MB
 
                                 # 计算速度（每秒更新一次）
                                 if current_time - last_update_time >= 1.0:
-                                    speed = (downloaded - last_downloaded) / (current_time - last_update_time)
+                                    speed = (downloaded - last_downloaded) / \
+                                        (current_time - last_update_time)
                                     last_update_time = current_time
                                     last_downloaded = downloaded
 
@@ -12310,8 +12947,10 @@ class VideoDownloader:
                                                         loop = asyncio.get_event_loop()
                                                     except RuntimeError:
                                                         loop = asyncio.new_event_loop()
-                                                        asyncio.set_event_loop(loop)
-                                                asyncio.run_coroutine_threadsafe(message_updater(progress_data), loop)
+                                                        asyncio.set_event_loop(
+                                                            loop)
+                                                asyncio.run_coroutine_threadsafe(
+                                                    message_updater(progress_data), loop)
                                             else:
                                                 # 同步函数，直接调用
                                                 message_updater(progress_data)
@@ -12325,9 +12964,11 @@ class VideoDownloader:
                                                     f"📥 下载中... {progress:.1f}% ({downloaded/(1024*1024):.1f}MB)"
                                                 )
                                             except Exception as e:
-                                                logger.warning(f"⚠️ 更新进度消息失败: {e}")
+                                                logger.warning(
+                                                    f"⚠️ 更新进度消息失败: {e}")
                                         else:
-                                            logger.info(f"📥 下载中... {progress:.1f}% ({downloaded/(1024*1024):.1f}MB)")
+                                            logger.info(
+                                                f"📥 下载中... {progress:.1f}% ({downloaded/(1024*1024):.1f}MB)")
 
                             # 下载完成后的最终更新
                             logger.info(f"✅ 下载完成: {downloaded} bytes")
@@ -12350,7 +12991,8 @@ class VideoDownloader:
                                             except RuntimeError:
                                                 loop = asyncio.new_event_loop()
                                                 asyncio.set_event_loop(loop)
-                                        asyncio.run_coroutine_threadsafe(message_updater(final_progress_data), loop)
+                                        asyncio.run_coroutine_threadsafe(
+                                            message_updater(final_progress_data), loop)
                                     else:
                                         # 同步函数，直接调用
                                         message_updater(final_progress_data)
@@ -12378,7 +13020,8 @@ class VideoDownloader:
             except Exception as e:
                 logger.warning(f"⚠️ 获取视频分辨率失败: {e}")
 
-            logger.info(f"✅ {video_info.platform}视频下载成功: {filename} ({size_mb:.1f} MB, 分辨率: {resolution})")
+            logger.info(
+                f"✅ {video_info.platform}视频下载成功: {filename} ({size_mb:.1f} MB, 分辨率: {resolution})")
 
             return {
                 "success": True,
@@ -12408,8 +13051,6 @@ class VideoDownloader:
                 "total_bytes": 0,
                 "filename": video_info.title or f"{video_info.platform}_{int(time.time())}.mp4"
             }
-
-
 
     def _build_bilibili_rename_script(self):
         """
@@ -12592,7 +13233,8 @@ class VideoDownloader:
             remaining_files = len(lines) - i - 1
             if remaining_files > 0:
                 omit_text = omit_template.format(remaining_files)
-                projected_length = current_length + len(line) + 1 + len(omit_text)  # +1 for newline
+                projected_length = current_length + \
+                    len(line) + 1 + len(omit_text)  # +1 for newline
             else:
                 projected_length = current_length + len(line)
 
@@ -12637,7 +13279,8 @@ class VideoDownloader:
             logger.info(f"🔍 处理完整标题文件: {file_name}")
 
             # 使用智能处理逻辑提取pxx部分
-            processed_title = self._process_bilibili_multipart_title(title_without_ext)
+            processed_title = self._process_bilibili_multipart_title(
+                title_without_ext)
 
             if processed_title != title_without_ext:
                 # 标题被处理了，说明找到了pxx部分
@@ -12650,7 +13293,8 @@ class VideoDownloader:
                 if file_path != new_file_path:
                     try:
                         file_path.rename(new_file_path)
-                        logger.info(f"✅ 智能重命名成功: {file_name} -> {safe_title}{file_ext}")
+                        logger.info(
+                            f"✅ 智能重命名成功: {file_name} -> {safe_title}{file_ext}")
                     except Exception as e:
                         logger.warning(f"⚠️ 重命名失败: {e}")
                 else:
@@ -12793,14 +13437,16 @@ class VideoDownloader:
                         new_name = re.sub(r'[\\/:*?"<>|【】｜]', '_', new_name)
                         new_name = re.sub(r'\s+', ' ', new_name).strip()
 
-                        new_file_path = file_path.parent / f"{new_name}{file_ext}"
+                        new_file_path = file_path.parent / \
+                            f"{new_name}{file_ext}"
 
                         logger.info(f"🎯 新文件名: {new_name}{file_ext}")
 
                         # 执行重命名
                         if file_path != new_file_path:
                             file_path.rename(new_file_path)
-                            logger.info(f"✅ 智能重命名成功: {file_name} -> {new_name}{file_ext}")
+                            logger.info(
+                                f"✅ 智能重命名成功: {file_name} -> {new_name}{file_ext}")
                         else:
                             logger.info(f"📝 文件名已正确: {new_name}{file_ext}")
                     else:
@@ -12832,7 +13478,8 @@ class VideoDownloader:
         logger.info(f"📋 预期文件数量: {len(expected_files)}")
 
         # 获取目录中所有视频文件
-        video_extensions = ["*.mp4", "*.mkv", "*.webm", "*.avi", "*.mov", "*.flv"]
+        video_extensions = ["*.mp4", "*.mkv",
+                            "*.webm", "*.avi", "*.mov", "*.flv"]
         all_video_files = []
         for ext in video_extensions:
             all_video_files.extend(list(Path(download_path).glob(ext)))
@@ -12861,10 +13508,12 @@ class VideoDownloader:
 
                     # 删除YouTube视频ID标识（仅在启用ID标签时）
                     if hasattr(self, 'bot') and hasattr(self.bot, 'youtube_id_tags') and self.bot.youtube_id_tags:
-                        cleaned = re.sub(r'\[[a-zA-Z0-9_-]{10,12}\]', '', cleaned)
+                        cleaned = re.sub(
+                            r'\[[a-zA-Z0-9_-]{10,12}\]', '', cleaned)
 
                     cleaned = re.sub(r'\.(webm|m4a|mp3)$', '.mp4', cleaned)
-                    cleaned = re.sub(r'\.(webm|m4a|mp3)\.mp4$', '.mp4', cleaned)
+                    cleaned = re.sub(
+                        r'\.(webm|m4a|mp3)\.mp4$', '.mp4', cleaned)
 
                     # 删除序号前缀
                     cleaned = re.sub(r'^\d+\.\s*', '', cleaned)
@@ -12889,7 +13538,8 @@ class VideoDownloader:
                     return cleaned
 
                 cleaned_actual = clean_filename_for_matching(actual_filename)
-                cleaned_expected = clean_filename_for_matching(expected_filename)
+                cleaned_expected = clean_filename_for_matching(
+                    expected_filename)
 
                 if cleaned_actual == cleaned_expected:
                     # 找到匹配的文件，进行重命名
@@ -12898,10 +13548,12 @@ class VideoDownloader:
                     if actual_file != new_file_path:  # 避免重命名为相同名称
                         try:
                             actual_file.rename(new_file_path)
-                            logger.info(f"✅ 重命名成功: {actual_filename} -> {expected_filename}")
+                            logger.info(
+                                f"✅ 重命名成功: {actual_filename} -> {expected_filename}")
                             renamed_count += 1
                         except Exception as e:
-                            logger.warning(f"⚠️ 重命名失败: {actual_filename} -> {expected_filename}, 错误: {e}")
+                            logger.warning(
+                                f"⚠️ 重命名失败: {actual_filename} -> {expected_filename}, 错误: {e}")
                     else:
                         logger.info(f"📝 文件名已正确: {expected_filename}")
                         renamed_count += 1
@@ -13064,10 +13716,13 @@ class VideoDownloader:
 
         # 合并基础配置
         if base_opts:
-            logger.info(f"🔧 [ENHANCED_OPTS] 合并前progress_hooks: {enhanced_opts.get('progress_hooks', [])}")
-            logger.info(f"🔧 [ENHANCED_OPTS] base_opts中的progress_hooks: {base_opts.get('progress_hooks', [])}")
+            logger.info(
+                f"🔧 [ENHANCED_OPTS] 合并前progress_hooks: {enhanced_opts.get('progress_hooks', [])}")
+            logger.info(
+                f"🔧 [ENHANCED_OPTS] base_opts中的progress_hooks: {base_opts.get('progress_hooks', [])}")
             enhanced_opts.update(base_opts)
-            logger.info(f"🔧 [ENHANCED_OPTS] 合并后progress_hooks: {len(enhanced_opts.get('progress_hooks', []))} 个回调")
+            logger.info(
+                f"🔧 [ENHANCED_OPTS] 合并后progress_hooks: {len(enhanced_opts.get('progress_hooks', []))} 个回调")
 
         # 🎯 真正修复：恢复v0.4-dev3成功方式 - 不设置默认format，让yt-dlp使用原生"best"
         # v0.4-dev3版本没有设置默认format，这是它能下载最高清视频的关键！
@@ -13106,7 +13761,8 @@ class VideoDownloader:
                     }
                 ],
                 'postprocessor_args': {
-                    'danmaku': ['filename=%(title)s.ass']  # 直接指定弹幕文件名，去掉.danmaku后缀
+                    # 直接指定弹幕文件名，去掉.danmaku后缀
+                    'danmaku': ['filename=%(title)s.ass']
                 }
             })
 
@@ -13115,7 +13771,6 @@ class VideoDownloader:
             logger.info("📝 B站弹幕下载已关闭")
 
         return ydl_opts
-
 
     def _resume_part_files(self, download_path, original_url):
         """断点续传PART文件"""
@@ -13132,7 +13787,8 @@ class VideoDownloader:
             try:
                 # 获取PART文件信息
                 file_size = part_file.stat().st_size
-                logger.info(f"📥 断点续传: {part_file.name} (已下载: {file_size / (1024*1024):.1f}MB)")
+                logger.info(
+                    f"📥 断点续传: {part_file.name} (已下载: {file_size / (1024*1024):.1f}MB)")
 
                 # 使用yt-dlp的断点续传功能
                 # 根据设置决定文件名模板
@@ -13210,14 +13866,16 @@ class VideoDownloader:
 
                 # 对于UGC合集，即使检测到单视频也要继续下载
                 if count == 1:
-                    logger.info("🎬 UGC合集模式：检测到单视频，继续使用smart_download_bilibili下载")
+                    logger.info(
+                        "🎬 UGC合集模式：检测到单视频，继续使用smart_download_bilibili下载")
 
                     # 设置下载路径
                     final_download_path = Path(download_path)
                     final_download_path.mkdir(parents=True, exist_ok=True)
 
                     # 构建输出模板
-                    output_template = str(final_download_path / "%(title)s.%(ext)s")
+                    output_template = str(
+                        final_download_path / "%(title)s.%(ext)s")
 
                     # 配置下载选项
                     ydl_opts = {
@@ -13283,7 +13941,8 @@ class VideoDownloader:
             logger.warning(f"⚠️ 重试次数已用完，仍有 {len(part_files)} 个未完成文件")
             return False
 
-        logger.info(f"🔄 检测到 {len(part_files)} 个未完成文件，尝试断点续传 (剩余重试: {max_retries})")
+        logger.info(
+            f"🔄 检测到 {len(part_files)} 个未完成文件，尝试断点续传 (剩余重试: {max_retries})")
 
         # 尝试断点续传PART文件
         resumed_count = self._resume_part_files(download_path, original_url)
@@ -13346,32 +14005,32 @@ class VideoDownloader:
     def _optimize_instagram_filename(self, title, video_info=None):
         """
         Instagram专用文件名优化
-        
+
         Args:
             title: 原始标题
             video_info: 视频信息字典（可选）
-            
+
         Returns:
             优化后的文件名
         """
         if not title:
             return f"instagram_{int(time.time())}"
-        
+
         # 去除常见的Instagram标题前缀
         optimized = title
-        
+
         # 去除 "Video by" 前缀
         if optimized.startswith("Video by "):
             optimized = optimized[9:]  # 去除 "Video by "
-        
+
         # 去除 "Photo by" 前缀
         if optimized.startswith("Photo by "):
             optimized = optimized[9:]  # 去除 "Photo by "
-        
-        # 去除 "Reel by" 前缀  
+
+        # 去除 "Reel by" 前缀
         if optimized.startswith("Reel by "):
             optimized = optimized[8:]  # 去除 "Reel by "
-        
+
         # 处理作者名称后的内容
         if " • " in optimized:
             # 如果有 " • " 分隔符，取后面的内容作为主要标题
@@ -13387,28 +14046,29 @@ class VideoDownloader:
                 optimized = parts[1].strip()
             else:
                 optimized = parts[0].strip()
-        
+
         # 去除末尾的常见标签和符号（在短标题检查之前）
         optimized = re.sub(r'\s*[#@]\s*.*$', '', optimized)  # 去除末尾的#标签和@提及
         optimized = re.sub(r'\s*\.\.\.$', '', optimized)     # 去除末尾的省略号
-        
+
         # 如果处理后的标题太短（可能只是用户名），添加Instagram前缀和时间戳
         if len(optimized.strip()) <= 3:  # 修改为 <= 3
             timestamp = int(time.time()) % 100000  # 使用时间戳后5位避免太长
-            optimized = f"instagram_{optimized}_{timestamp}" if optimized.strip() else f"instagram_{timestamp}"
-        
+            optimized = f"instagram_{optimized}_{timestamp}" if optimized.strip(
+            ) else f"instagram_{timestamp}"
+
         # 限制长度并清理
         optimized = self._sanitize_filename(optimized.strip(), max_length=50)
-        
+
         # 如果最终结果为空，使用默认名称
         if not optimized or optimized.isspace():
             return f"instagram_{int(time.time())}"
-        
+
         # 添加时间戳后缀避免重复（可选，取决于用户偏好）
         # 可以根据需要启用这个功能
         # timestamp = int(time.time()) % 10000
         # optimized = f"{optimized}_{timestamp}"
-        
+
         return optimized
 
     def _create_gallery_dl_config(self):
@@ -13422,11 +14082,14 @@ class VideoDownloader:
         if not gallery_dl_download_path:
             # 本地开发环境默认值
             gallery_dl_download_path = str(self.download_path / "gallery")
-            logger.info(f"⚠️ 未设置 GALLERY_DL_DOWNLOAD_PATH 环境变量，使用默认值: {gallery_dl_download_path}")
+            logger.info(
+                f"⚠️ 未设置 GALLERY_DL_DOWNLOAD_PATH 环境变量，使用默认值: {gallery_dl_download_path}")
         else:
-            logger.info(f"✅ 使用 GALLERY_DL_DOWNLOAD_PATH 环境变量: {gallery_dl_download_path}")
+            logger.info(
+                f"✅ 使用 GALLERY_DL_DOWNLOAD_PATH 环境变量: {gallery_dl_download_path}")
 
-        logger.info(f"🎯 使用 GALLERY_DL_DOWNLOAD_PATH: {gallery_dl_download_path}")
+        logger.info(
+            f"🎯 使用 GALLERY_DL_DOWNLOAD_PATH: {gallery_dl_download_path}")
 
         # 从环境变量获取X_COOKIES路径
         x_cookies_env = os.environ.get("X_COOKIES")
@@ -13434,7 +14097,8 @@ class VideoDownloader:
             cookies_path = x_cookies_env
             logger.info(f"🍪 从环境变量获取X_COOKIES: {cookies_path}")
         else:
-            cookies_path = str(self.x_cookies_path) if self.x_cookies_path else None
+            cookies_path = str(
+                self.x_cookies_path) if self.x_cookies_path else None
             logger.info(f"🍪 使用初始化参数中的X cookies: {cookies_path}")
 
         config = {
@@ -13482,7 +14146,8 @@ class VideoDownloader:
             json.dump(config, f, indent=2, ensure_ascii=False)
 
         logger.info(f"已成功创建 gallery-dl.conf 配置文件: {config_path}")
-        logger.info(f"配置文件内容:\n{json.dumps(config, indent=2, ensure_ascii=False)}")
+        logger.info(
+            f"配置文件内容:\n{json.dumps(config, indent=2, ensure_ascii=False)}")
 
     async def _download_apple_music(self, url: str, download_path: str, message_updater=None, status_message=None, context=None) -> dict:
         """下载 Apple Music"""
@@ -13491,19 +14156,19 @@ class VideoDownloader:
                 # 尝试重新初始化
                 try:
                     from applemusic_downloader_plus import AppleMusicDownloaderPlus
-                    
+
                     self.apple_music_downloader = AppleMusicDownloaderPlus(
                         output_dir=str(self.apple_music_download_path),
                         cookies_path=self.apple_music_cookies_path
                     )
-                    
+
                     # 检查是否成功
                     if not (self.apple_music_downloader and self.apple_music_downloader.is_available()):
                         self.apple_music_downloader = None
-                        
+
                 except Exception:
                     self.apple_music_downloader = None
-                
+
                 # 如果重新初始化也失败，返回错误
                 if not self.apple_music_downloader:
                     return {
@@ -13555,7 +14220,8 @@ class VideoDownloader:
                     logger.info("🍎 开始下载专辑，超时时间：15分钟")
                     try:
                         result = await asyncio.wait_for(
-                            self.apple_music_downloader.download_album(url, progress_callback),
+                            self.apple_music_downloader.download_album(
+                                url, progress_callback),
                             timeout=900.0  # 15分钟超时
                         )
                     except asyncio.TimeoutError:
@@ -13571,10 +14237,20 @@ class VideoDownloader:
                     # 单曲下载：设置较短的超时时间（5分钟）
                     logger.info("🍎 开始下载单曲，超时时间：5分钟")
                     try:
-                        result = await asyncio.wait_for(
-                            self.apple_music_downloader.download_song(url, progress_callback),
-                            timeout=300.0  # 5分钟超时
-                        )
+                        # gamdl下载
+                        if type(self.apple_music_downloader).__name__ == 'AppleMusicDownloader':
+                            result = await asyncio.wait_for(
+                                self.apple_music_downloader.download_music(
+                                    url, progress_callback),
+                                timeout=300.0  # 5分钟超时
+                            )
+                        else:
+                            # plus
+                            result = await asyncio.wait_for(
+                                self.apple_music_downloader.download_song(
+                                    url, progress_callback),
+                                timeout=300.0  # 5分钟超时
+                            )
                     except asyncio.TimeoutError:
                         logger.error("⏰ Apple Music单曲下载超时（5分钟）")
                         return {
@@ -13584,7 +14260,7 @@ class VideoDownloader:
                             "content_type": "song",
                             "url": url
                         }
-                
+
                 if result.get('success'):
                     logger.info(f"🍎 Apple Music 下载成功: {result}")
                     return {
@@ -13593,7 +14269,8 @@ class VideoDownloader:
                         "content_type": music_info.get('type', 'music'),
                         "download_path": str(self.apple_music_download_path),
                         "files_count": result.get('files_count', 0),
-                        "total_size_mb": result.get('total_size_mb', 0),  # 🔧 修复：只使用total_size_mb字段
+                        # 🔧 修复：只使用total_size_mb字段
+                        "total_size_mb": result.get('total_size_mb', 0),
                         "file_formats": result.get('file_formats', []),
                         "music_type": music_info.get('type'),
                         "country": music_info.get('country'),
@@ -13609,7 +14286,7 @@ class VideoDownloader:
                         "content_type": "music",
                         "url": url  # 添加URL字段
                     }
-                    
+
             except Exception as e:
                 logger.error(f"🍎 Apple Music 下载异常: {e}")
                 return {
@@ -13630,7 +14307,6 @@ class VideoDownloader:
                 "url": url  # 添加URL字段
             }
 
-
     async def _download_netease_music(self, url: str, download_path: str, message_updater=None, status_message=None, context=None) -> dict:
         """下载网易云音乐"""
         import threading
@@ -13641,10 +14317,11 @@ class VideoDownloader:
                     # 动态导入neteasecloud_music模块，避免全局导入失败的影响
                     import neteasecloud_music
                     from neteasecloud_music import NeteaseDownloader
-                    
+
                     # 直接使用NeteaseDownloader，不需要适配器
                     self.netease_downloader = NeteaseDownloader(bot=self)
-                    logger.info(f"🎵 网易云音乐下载器重新初始化成功 (模块: {neteasecloud_music.__file__})")
+                    logger.info(
+                        f"🎵 网易云音乐下载器重新初始化成功 (模块: {neteasecloud_music.__file__})")
                 except Exception as e:
                     logger.warning(f"网易云音乐下载器重新初始化失败: {e}")
                     return {
@@ -13678,11 +14355,11 @@ class VideoDownloader:
                     context=context
                 )
             else:
-                progress_callback = lambda d: None
+                def progress_callback(d): return None
 
             # 使用新的download_by_url方法，自动处理所有链接格式
             logger.info(f"🔗 使用新的download_by_url方法处理链接: {url}")
-            
+
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
@@ -13787,7 +14464,8 @@ class VideoDownloader:
                         self.netease_downloader.download_song_by_id,
                         song_id,
                         str(download_path),
-                        self.netease_downloader.quality_map.get(quality, '320k'),
+                        self.netease_downloader.quality_map.get(
+                            quality, '320k'),
                         progress_callback
                     )
                 else:
@@ -13799,7 +14477,8 @@ class VideoDownloader:
                         search_keyword,
                         "",  # artist
                         str(download_path),
-                        self.netease_downloader.quality_map.get(quality, '320k'),
+                        self.netease_downloader.quality_map.get(
+                            quality, '320k'),
                         progress_callback
                     )
 
@@ -13847,10 +14526,11 @@ class VideoDownloader:
                     # 动态导入qqmusic_downloader模块，避免全局导入失败的影响
                     import qqmusic_downloader
                     from qqmusic_downloader import QQMusicDownloader
-                    
+
                     # 直接使用QQMusicDownloader
                     self.qqmusic_downloader = QQMusicDownloader(bot=self)
-                    logger.info(f"🎵 QQ音乐下载器重新初始化成功 (模块: {qqmusic_downloader.__file__})")
+                    logger.info(
+                        f"🎵 QQ音乐下载器重新初始化成功 (模块: {qqmusic_downloader.__file__})")
                 except Exception as e:
                     logger.warning(f"QQ音乐下载器重新初始化失败: {e}")
                     return {
@@ -13876,7 +14556,7 @@ class VideoDownloader:
                 last_time = time.time()
                 last_downloaded = 0
                 last_update_time = time.time()
-                
+
                 def progress_callback(progress, downloaded, total, filename=None):
                     nonlocal last_time, last_downloaded, last_update_time
                     try:
@@ -13890,28 +14570,30 @@ class VideoDownloader:
                                 progress_percent = (downloaded / total) * 100
                                 total_mb = total / (1024 * 1024)
                                 downloaded_mb = downloaded / (1024 * 1024)
-                                
+
                                 # 计算真正的下载速度
                                 time_diff = current_time - last_time
                                 downloaded_diff = downloaded - last_downloaded
-                                
+
                                 if time_diff > 0 and downloaded_diff > 0:
                                     speed_bytes_per_sec = downloaded_diff / time_diff
-                                    speed_mb = speed_bytes_per_sec / (1024 * 1024)
+                                    speed_mb = speed_bytes_per_sec / \
+                                        (1024 * 1024)
                                 elif progress_percent >= 100:
                                     # 下载完成时，显示"完成"
                                     speed_mb = "完成"
                                 else:
                                     speed_mb = 0
-                                
+
                                 # 更新时间和下载量
                                 last_time = current_time
                                 last_downloaded = downloaded
-                                
+
                                 # 计算预计剩余时间
                                 if isinstance(speed_mb, (int, float)) and speed_mb > 0 and total > downloaded:
                                     remaining = total - downloaded
-                                    eta_seconds = int(remaining / (speed_bytes_per_sec))
+                                    eta_seconds = int(
+                                        remaining / (speed_bytes_per_sec))
                                     mins, secs = divmod(eta_seconds, 60)
                                     if mins > 0:
                                         eta_str = f"{mins:02d}:{secs:02d}"
@@ -13919,30 +14601,34 @@ class VideoDownloader:
                                         eta_str = f"00:{secs:02d}"
                                 else:
                                     eta_str = "未知"
-                                
+
                                 # 创建进度条（参考网易云音乐格式）
                                 def _create_progress_bar(percent: float, length: int = 20) -> str:
                                     filled_length = int(length * percent / 100)
                                     return "█" * filled_length + "░" * (length - filled_length)
-                                
-                                progress_bar = _create_progress_bar(progress_percent)
-                                
+
+                                progress_bar = _create_progress_bar(
+                                    progress_percent)
+
                                 # 处理文件名显示
                                 display_filename = "正在下载..."
                                 if filename:
                                     # 清理文件名显示（参考网易云音乐格式）
                                     import os
-                                    display_filename = os.path.basename(filename)
+                                    display_filename = os.path.basename(
+                                        filename)
                                     if len(display_filename) > 35:
-                                        name, ext = os.path.splitext(display_filename)
-                                        display_filename = name[:30] + "..." + ext
-                                
+                                        name, ext = os.path.splitext(
+                                            display_filename)
+                                        display_filename = name[:30] + \
+                                            "..." + ext
+
                                 # 使用和网易云音乐相同的格式
                                 if isinstance(speed_mb, str):
                                     speed_display = speed_mb
                                 else:
                                     speed_display = f"{speed_mb:.2f}MB/s"
-                                
+
                                 progress_text = (
                                     f"🎵 音乐: QQ音乐下载中...\n"
                                     f"📝 文件: {display_filename}\n"
@@ -13951,14 +14637,15 @@ class VideoDownloader:
                                     f"⏳ 预计剩余: {eta_str}\n"
                                     f"📊 进度: {progress_bar} ({progress_percent:.1f}%)"
                                 )
-                                
+
                                 # 处理异步函数
                                 if asyncio.iscoroutinefunction(message_updater):
                                     # 异步函数，使用 run_coroutine_threadsafe
                                     try:
                                         loop = asyncio.get_running_loop()
                                         asyncio.run_coroutine_threadsafe(
-                                            message_updater(progress_text), loop
+                                            message_updater(
+                                                progress_text), loop
                                         )
                                     except Exception as e:
                                         logger.warning(f"异步消息更新失败: {e}")
@@ -13973,7 +14660,7 @@ class VideoDownloader:
             # 使用asyncio.run_in_executor在独立线程中运行同步的下载函数
             import asyncio
             loop = asyncio.get_event_loop()
-            
+
             # 调用download_by_url方法
             result = await loop.run_in_executor(
                 None,
@@ -14023,13 +14710,13 @@ class VideoDownloader:
                 else:
                     # 单首歌曲下载结果
                     song_info = result.get('song_info', {})
-                    
+
                     # 正确提取歌手信息
                     song_artist = song_info.get('singer', '未知歌手')
-                    
+
                     # 正确提取专辑信息
                     album_name = song_info.get('album', '未知专辑')
-                    
+
                     return {
                         "success": True,
                         "platform": "QQMusic",
@@ -14070,10 +14757,12 @@ class VideoDownloader:
                     # 动态导入youtubemusic_downloader模块，避免全局导入失败的影响
                     import youtubemusic_downloader
                     from youtubemusic_downloader import YouTubeMusicDownloader
-                    
+
                     # 直接使用YouTubeMusicDownloader
-                    self.youtubemusic_downloader = YouTubeMusicDownloader(bot=self)
-                    logger.info(f"🎵 YouTube Music下载器重新初始化成功 (模块: {youtubemusic_downloader.__file__})")
+                    self.youtubemusic_downloader = YouTubeMusicDownloader(
+                        bot=self)
+                    logger.info(
+                        f"🎵 YouTube Music下载器重新初始化成功 (模块: {youtubemusic_downloader.__file__})")
                 except Exception as e:
                     logger.warning(f"YouTube Music下载器重新初始化失败: {e}")
                     return {
@@ -14131,7 +14820,8 @@ YouTube Music下载进度回调函数"""
                                     try:
                                         loop = asyncio.get_running_loop()
                                         asyncio.run_coroutine_threadsafe(
-                                            message_updater(progress_text), loop
+                                            message_updater(
+                                                progress_text), loop
                                         )
                                     except Exception as e:
                                         logger.warning(f"异步消息更新失败: {e}")
@@ -14142,13 +14832,15 @@ YouTube Music下载进度回调函数"""
                                 logger.warning(f"YouTube Music进度更新失败: {e}")
                     elif isinstance(data, dict) and data.get('status') == 'finished':
                         if message_updater:
-                            finished_text = data.get('progress_text', '✅ YouTube Music下载完成')
+                            finished_text = data.get(
+                                'progress_text', '✅ YouTube Music下载完成')
                             try:
                                 if asyncio.iscoroutinefunction(message_updater):
                                     try:
                                         loop = asyncio.get_running_loop()
                                         asyncio.run_coroutine_threadsafe(
-                                            message_updater(finished_text), loop
+                                            message_updater(
+                                                finished_text), loop
                                         )
                                     except Exception as e:
                                         logger.warning(f"异步消息更新失败: {e}")
@@ -14162,7 +14854,7 @@ YouTube Music下载进度回调函数"""
             # 使用asyncio.run_in_executor在独立线程中运行同步的下载函数
             import asyncio
             loop = asyncio.get_event_loop()
-            
+
             # 调用download_by_url方法
             result = await loop.run_in_executor(
                 None,
@@ -14264,9 +14956,10 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"❌ SQLite 数据库配置初始化失败: {e}")
             raise  # 直接抛出异常，不回退到文件配置
-        
+
         # 设置配置项
-        self.auto_download_enabled = self.config.get("auto_download_enabled", True)
+        self.auto_download_enabled = self.config.get(
+            "auto_download_enabled", True)
         self.download_tasks = (
             {}
         )  # 存储下载任务 {task_id: {'task': asyncio.Task, 'cancelled': bool}}
@@ -14275,43 +14968,56 @@ class TelegramBot:
         self.main_loop: Optional[asyncio.AbstractEventLoop] = None  # 保存主事件循环
 
         # 新增：B站自动下载全集配置
-        self.bilibili_auto_playlist = self.config.get("bilibili_auto_playlist", False)  # 默认关闭自动下载全集
+        self.bilibili_auto_playlist = self.config.get(
+            "bilibili_auto_playlist", False)  # 默认关闭自动下载全集
 
         # 新增：YouTube音频模式配置
-        self.youtube_audio_mode = self.config.get("youtube_audio_mode", False)  # 默认关闭音频模式
+        self.youtube_audio_mode = self.config.get(
+            "youtube_audio_mode", False)  # 默认关闭音频模式
 
         # 新增：YouTube Mix播放列表自动下载配置
-        self.youtube_mix_playlist = self.config.get("youtube_mix_playlist", False)  # 默认关闭Mix播放列表下载
+        self.youtube_mix_playlist = self.config.get(
+            "youtube_mix_playlist", False)  # 默认关闭Mix播放列表下载
 
         # 新增：YouTube ID标签配置
-        self.youtube_id_tags = self.config.get("youtube_id_tags", False)  # 默认关闭ID标签
+        self.youtube_id_tags = self.config.get(
+            "youtube_id_tags", False)  # 默认关闭ID标签
 
         # 新增：B站弹幕下载配置
-        self.bilibili_danmaku_download = self.config.get("bilibili_danmaku_download", False)  # 默认关闭弹幕下载
+        self.bilibili_danmaku_download = self.config.get(
+            "bilibili_danmaku_download", False)  # 默认关闭弹幕下载
 
         # 新增：B站UGC播放列表自动下载配置
-        self.bilibili_ugc_playlist = self.config.get("bilibili_ugc_playlist", False)  # 默认关闭UGC合集下载
+        self.bilibili_ugc_playlist = self.config.get(
+            "bilibili_ugc_playlist", False)  # 默认关闭UGC合集下载
 
         # 新增：网易云歌词合并配置
-        self.netease_lyrics_merge = self.config.get("netease_lyrics_merge", False)  # 默认关闭歌词合并
+        self.netease_lyrics_merge = self.config.get(
+            "netease_lyrics_merge", False)  # 默认关闭歌词合并
 
         # 新增：网易云artist下载配置
-        self.netease_artist_download = self.config.get("netease_artist_download", True)  # 默认开启artist下载
+        self.netease_artist_download = self.config.get(
+            "netease_artist_download", True)  # 默认开启artist下载
 
         # 新增：网易云cover下载配置
-        self.netease_cover_download = self.config.get("netease_cover_download", True)  # 默认开启cover下载
+        self.netease_cover_download = self.config.get(
+            "netease_cover_download", True)  # 默认开启cover下载
 
         # 新增：YouTube封面下载配置
-        self.youtube_thumbnail_download = self.config.get("youtube_thumbnail_download", False)  # 默认关闭封面下载
+        self.youtube_thumbnail_download = self.config.get(
+            "youtube_thumbnail_download", False)  # 默认关闭封面下载
 
         # 新增：YouTube字幕下载配置
-        self.youtube_subtitle_download = self.config.get("youtube_subtitle_download", False)  # 默认关闭字幕下载
+        self.youtube_subtitle_download = self.config.get(
+            "youtube_subtitle_download", False)  # 默认关闭字幕下载
 
         # 新增：YouTube时间戳命名配置
-        self.youtube_timestamp_naming = self.config.get("youtube_timestamp_naming", False)  # 默认关闭时间戳命名
+        self.youtube_timestamp_naming = self.config.get(
+            "youtube_timestamp_naming", False)  # 默认关闭时间戳命名
 
         # 新增：B站封面下载配置
-        self.bilibili_thumbnail_download = self.config.get("bilibili_thumbnail_download", False)  # 默认关闭B站封面下载
+        self.bilibili_thumbnail_download = self.config.get(
+            "bilibili_thumbnail_download", False)  # 默认关闭B站封面下载
 
         # B站收藏夹订阅管理器 - 确保属性始终存在
         self.fav_manager = None  # 先设置默认值
@@ -14346,22 +15052,25 @@ class TelegramBot:
                     "/app/config/savextube.toml",
                     "config.toml"
                 ]
-                
+
                 for config_path in config_paths:
                     if os.path.exists(config_path):
-                        logger.info(f"📖 尝试从TOML配置文件读取qBittorrent配置: {config_path}")
+                        logger.info(
+                            f"📖 尝试从TOML配置文件读取qBittorrent配置: {config_path}")
                         toml_config = load_toml_config(config_path)
                         if toml_config:
-                            qb_toml_config = get_qbittorrent_config(toml_config)
+                            qb_toml_config = get_qbittorrent_config(
+                                toml_config)
                             if qb_toml_config and all(qb_toml_config.values()):
                                 self.qb_config.update(qb_toml_config)
-                                logger.info(f"✅ 从TOML配置文件成功读取qBittorrent配置: {config_path}")
+                                logger.info(
+                                    f"✅ 从TOML配置文件成功读取qBittorrent配置: {config_path}")
                                 break
             except Exception as e:
                 logger.warning(f"⚠️ 从TOML配置文件读取qBittorrent配置失败: {e}")
 
         # 如果TOML配置不完整，尝试从环境变量读取
-        if not all([self.qb_config["host"], self.qb_config["port"], 
+        if not all([self.qb_config["host"], self.qb_config["port"],
                    self.qb_config["username"], self.qb_config["password"]]):
             logger.info("📖 从环境变量读取qBittorrent配置")
             env_config = {
@@ -14370,7 +15079,7 @@ class TelegramBot:
                 "username": os.getenv("QB_USERNAME"),
                 "password": os.getenv("QB_PASSWORD"),
             }
-            
+
             # 只更新未设置的配置项
             for key, value in env_config.items():
                 if value and not self.qb_config[key]:
@@ -14386,14 +15095,16 @@ class TelegramBot:
             try:
                 self.qb_config["port"] = int(self.qb_config["port"])
                 self.qb_config["enabled"] = True
-                logger.info(f"✅ 已配置 qBittorrent: {self.qb_config['host']}:{self.qb_config['port']}")
+                logger.info(
+                    f"✅ 已配置 qBittorrent: {self.qb_config['host']}:{self.qb_config['port']}")
             except (ValueError, TypeError):
                 logger.warning("qBittorrent 端口配置无效，跳过连接")
         else:
             logger.info("❌ 未配置 qBittorrent (缺少必要的配置项)")
 
         # 新增：权限管理
-        self.allowed_user_ids = self._parse_user_ids(os.getenv("TELEGRAM_BOT_ALLOWED_USER_IDS", ""))
+        self.allowed_user_ids = self._parse_user_ids(
+            os.getenv("TELEGRAM_BOT_ALLOWED_USER_IDS", ""))
         logger.info(f"🔐 允许的用户: {self.allowed_user_ids}")
 
     async def hot_reload_user_client(self, session_string: str, api_id: Optional[str] = None, api_hash: Optional[str] = None) -> str:
@@ -14423,7 +15134,8 @@ class TelegramBot:
                 logger.error(f"❌ API ID转换失败: {e}")
                 return f"error: invalid api_id format"
 
-            client = TelegramClient(StringSession(session_string), api_id_int, api_hash)
+            client = TelegramClient(StringSession(
+                session_string), api_id_int, api_hash)
 
             # 代理配置
             if self.downloader and getattr(self.downloader, "proxy_host", None):
@@ -14521,30 +15233,28 @@ class TelegramBot:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._save_config_sync)
 
-
-
     def _extract_duration_from_filename(self, filename: str) -> str:
         """从文件名中提取时长信息"""
         try:
             # 常见的时长格式：文件名中包含时长信息
             # 例如：歌曲名 (3:45).m4a 或 歌曲名 [3:45].m4a
             import re
-            
+
             # 匹配 (MM:SS) 或 [MM:SS] 格式
             duration_pattern = r'[\(\[\]]([0-9]+):([0-9]{2})[\)\]]'
             match = re.search(duration_pattern, filename)
-            
+
             if match:
                 minutes = int(match.group(1))
                 seconds = int(match.group(2))
                 return f"{minutes}:{seconds:02d}"
-            
+
             # 如果没有找到时长信息，返回默认值
             return "未知"
-            
+
         except Exception:
             return "未知"
-    
+
     def _escape_markdown(self, text: str) -> str:
         """转义Markdown特殊字符"""
         if not text:
@@ -14585,7 +15295,7 @@ class TelegramBot:
         # 音质映射表
         quality_map = {
             'standard': '128k',
-            'higher': '320k', 
+            'higher': '320k',
             'exhigh': '320k',
             'lossless': 'flac',
             'hires': 'flac24bit',
@@ -14597,7 +15307,7 @@ class TelegramBot:
             'master': 'flac24bit',
             'surround': 'flac24bit'
         }
-        
+
         # 详细音质信息
         quality_info_map = {
             '128k': {'name': '标准', 'format': 'MP3', 'bitrate': '16bit/44khz/128kbps'},
@@ -14605,17 +15315,17 @@ class TelegramBot:
             'flac': {'name': '无损', 'format': 'FLAC', 'bitrate': '16bit/44khz/1058kbps'},
             'flac24bit': {'name': '高解析度无损', 'format': 'FLAC', 'bitrate': '24bit/96khz/2016kbps'}
         }
-        
+
         # 获取质量代码
         quality_code = quality_map.get(quality, quality)
-        
+
         # 返回详细信息
         return quality_info_map.get(quality_code, {
             'name': quality.upper(),
             'format': 'Unknown',
             'bitrate': 'Unknown'
         })
-    
+
     def _get_qqmusic_quality_info(self, quality: str) -> dict:
         """获取QQ音乐音质的详细信息（名称、格式、码率）"""
         # 音质映射表
@@ -14631,7 +15341,7 @@ class TelegramBot:
             'standard': '128k',
             'lossless': 'flac'
         }
-        
+
         # 详细音质信息
         quality_info_map = {
             '48k': {'name': 'AAC标准', 'format': 'AAC', 'bitrate': '48kbps'},
@@ -14640,10 +15350,10 @@ class TelegramBot:
             '320k': {'name': 'MP3高品质', 'format': 'MP3', 'bitrate': '16bit/44khz/320kbps'},
             'flac': {'name': 'FLAC无损', 'format': 'FLAC', 'bitrate': '16bit/44khz/1058kbps'}
         }
-        
+
         # 获取质量代码
         quality_code = quality_map.get(quality, quality)
-        
+
         # 返回详细信息
         return quality_info_map.get(quality_code, {
             'name': quality.upper(),
@@ -14667,22 +15377,24 @@ class TelegramBot:
                             artist = artist.split(',')[0].strip()
                         # 统计艺术家出现次数
                         if artist and artist != '':
-                            artist_counts[artist] = artist_counts.get(artist, 0) + 1
-                
+                            artist_counts[artist] = artist_counts.get(
+                                artist, 0) + 1
+
                 # 选择出现次数最多的艺术家
                 if artist_counts:
-                    most_common_artist = max(artist_counts, key=artist_counts.get)
+                    most_common_artist = max(
+                        artist_counts, key=artist_counts.get)
                     if most_common_artist:
                         return most_common_artist
-            
+
             # 从路径中提取艺术家信息
             # 路径格式通常是：/downloads/Netease/艺术家/专辑名称
             path_parts = download_path.split('/')
-            
+
             # 查找可能的艺术家目录（排除专辑名和系统目录）
             for part in reversed(path_parts):
-                if (part and 
-                    part != album_name and 
+                if (part and
+                    part != album_name and
                     not part.startswith('downloads') and
                     not part.startswith('Netease') and
                     not part.startswith('netease') and
@@ -14695,17 +15407,17 @@ class TelegramBot:
                     not part.endswith('(2021)') and
                     not part.endswith('(2022)') and
                     not part.endswith('(2023)') and
-                    not part.endswith('(2024)')):
+                        not part.endswith('(2024)')):
                     return part
-            
+
             # 如果路径中没有找到艺术家，尝试从专辑名称中提取
             if ' - ' in album_name:
                 artist = album_name.split(' - ')[0].strip()
                 return artist
-            
+
             # 默认返回未知艺术家
             return "未知艺术家"
-                
+
         except Exception as e:
             logger.warning(f"提取艺术家信息失败: {e}")
             return "未知艺术家"
@@ -14766,8 +15478,10 @@ class TelegramBot:
                     print(f"  ✅ /{cmd.command} - {cmd.description}")
                     logger.info(f"  /{cmd.command} - {cmd.description}")
             else:
-                print(f"⚠️ [MENU] 命令菜单设置可能有问题，期望 {len(commands)} 个，实际 {len(set_commands)} 个")
-                logger.warning(f"⚠️ 命令菜单设置可能有问题，期望 {len(commands)} 个，实际 {len(set_commands)} 个")
+                print(
+                    f"⚠️ [MENU] 命令菜单设置可能有问题，期望 {len(commands)} 个，实际 {len(set_commands)} 个")
+                logger.warning(
+                    f"⚠️ 命令菜单设置可能有问题，期望 {len(commands)} 个，实际 {len(set_commands)} 个")
 
         except Exception as e:
             print(f"❌ [MENU] 设置命令菜单失败: {e}")
@@ -14900,7 +15614,8 @@ class TelegramBot:
 
             try:
                 # 使用临时文件路径添加种子
-                self.qbit_client.torrents_add(torrent_files=temp_file_path, tags="savextube")
+                self.qbit_client.torrents_add(
+                    torrent_files=temp_file_path, tags="savextube")
                 logger.info("✅ 成功添加种子文件到 qBittorrent")
                 return True
             finally:
@@ -14921,8 +15636,6 @@ class TelegramBot:
             logger.error(f"错误类型: {type(e).__name__}")
             return False
 
-
-
     def _get_resolution_quality(self, resolution):
         """根据分辨率生成质量标识，如果已有质量标识则不重复添加"""
         if not resolution or resolution == '未知':
@@ -14930,7 +15643,8 @@ class TelegramBot:
 
         # 检查是否已经包含质量标识
         import re
-        quality_patterns = [r'\(8K\)', r'\(4K\)', r'\(2K\)', r'\(1080[Pp]\)', r'\(720[Pp]\)', r'\(480[Pp]\)', r'\(360[Pp]\)', r'\(\d+[Pp]\)']
+        quality_patterns = [r'\(8K\)', r'\(4K\)', r'\(2K\)', r'\(1080[Pp]\)',
+                            r'\(720[Pp]\)', r'\(480[Pp]\)', r'\(360[Pp]\)', r'\(\d+[Pp]\)']
         if any(re.search(pattern, resolution) for pattern in quality_patterns):
             return ''  # 已经有质量标识，不重复添加
 
@@ -14987,10 +15701,6 @@ class TelegramBot:
         else:
             return ' (低画质)'
 
-
-
-
-
     def _signal_handler(self, signum, frame):
         """处理系统信号"""
         logger.info(f"收到信号 {signum}，正在优雅关闭...")
@@ -15006,52 +15716,72 @@ class TelegramBot:
         if not self.application:
             return
 
-        self.application.add_handler(CommandHandler("start", self.start_command))
+        self.application.add_handler(
+            CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
-        self.application.add_handler(CommandHandler("version", self.version_command))
-        self.application.add_handler(CommandHandler("reboot", self.reboot_command))
-        self.application.add_handler(CommandHandler("status", self.status_command))
+        self.application.add_handler(
+            CommandHandler("version", self.version_command))
+        self.application.add_handler(
+            CommandHandler("reboot", self.reboot_command))
+        self.application.add_handler(
+            CommandHandler("status", self.status_command))
         # self.application.add_handler(CommandHandler("sxt", self.sxt_command))
         # # 已删除：sxt命令处理器
-        self.application.add_handler(CommandHandler("settings", self.settings_command))
-        self.application.add_handler(CommandHandler("favsub", self.favsub_command))
-        self.application.add_handler(CommandHandler("cancel", self.cancel_command))
-        self.application.add_handler(CommandHandler("cleanup", self.cleanup_command))
         self.application.add_handler(
-            CallbackQueryHandler(self.settings_button_handler, pattern="toggle_autop")
+            CommandHandler("settings", self.settings_command))
+        self.application.add_handler(
+            CommandHandler("favsub", self.favsub_command))
+        self.application.add_handler(
+            CommandHandler("cancel", self.cancel_command))
+        self.application.add_handler(
+            CommandHandler("cleanup", self.cleanup_command))
+        self.application.add_handler(
+            CallbackQueryHandler(
+                self.settings_button_handler, pattern="toggle_autop")
         )
         self.application.add_handler(
-            CallbackQueryHandler(self.settings_button_handler, pattern="toggle_id_tags")
+            CallbackQueryHandler(
+                self.settings_button_handler, pattern="toggle_id_tags")
         )
         self.application.add_handler(
-            CallbackQueryHandler(self.settings_button_handler, pattern="toggle_danmaku")
+            CallbackQueryHandler(
+                self.settings_button_handler, pattern="toggle_danmaku")
         )
         self.application.add_handler(
-            CallbackQueryHandler(self.settings_button_handler, pattern="toggle_audio_mode")
+            CallbackQueryHandler(self.settings_button_handler,
+                                 pattern="toggle_audio_mode")
         )
         self.application.add_handler(
-            CallbackQueryHandler(self.settings_button_handler, pattern="toggle_ugc_playlist")
+            CallbackQueryHandler(self.settings_button_handler,
+                                 pattern="toggle_ugc_playlist")
         )
         self.application.add_handler(
-            CallbackQueryHandler(self.settings_button_handler, pattern="toggle_thumbnail")
+            CallbackQueryHandler(self.settings_button_handler,
+                                 pattern="toggle_thumbnail")
         )
         self.application.add_handler(
-            CallbackQueryHandler(self.settings_button_handler, pattern="toggle_subtitle")
+            CallbackQueryHandler(
+                self.settings_button_handler, pattern="toggle_subtitle")
         )
         self.application.add_handler(
-            CallbackQueryHandler(self.settings_button_handler, pattern="toggle_timestamp")
+            CallbackQueryHandler(self.settings_button_handler,
+                                 pattern="toggle_timestamp")
         )
         self.application.add_handler(
-            CallbackQueryHandler(self.settings_button_handler, pattern="toggle_bilibili_thumbnail")
+            CallbackQueryHandler(self.settings_button_handler,
+                                 pattern="toggle_bilibili_thumbnail")
         )
         self.application.add_handler(
-            CallbackQueryHandler(self.settings_button_handler, pattern="toggle_lyrics_merge")
+            CallbackQueryHandler(self.settings_button_handler,
+                                 pattern="toggle_lyrics_merge")
         )
         self.application.add_handler(
-            CallbackQueryHandler(self.settings_button_handler, pattern="toggle_artist_download")
+            CallbackQueryHandler(self.settings_button_handler,
+                                 pattern="toggle_artist_download")
         )
         self.application.add_handler(
-            CallbackQueryHandler(self.settings_button_handler, pattern="toggle_cover_download")
+            CallbackQueryHandler(self.settings_button_handler,
+                                 pattern="toggle_cover_download")
         )
         self.application.add_handler(
             CallbackQueryHandler(self.cancel_task_callback, pattern="cancel:")
@@ -15068,7 +15798,8 @@ class TelegramBot:
 
         # 文本消息处理器 - 保持不变
         self.application.add_handler(
-            MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message)
+            MessageHandler(filters.TEXT & ~filters.COMMAND,
+                           self.handle_message)
         )
 
         # 错误处理器
@@ -15096,7 +15827,8 @@ class TelegramBot:
                 try:
                     with open(session_file_path, "r", encoding="utf-8") as f:
                         session_string = f.read().strip()
-                    logger.info(f"✅ 从文件加载 Telethon Session: {session_file_path}")
+                    logger.info(
+                        f"✅ 从文件加载 Telethon Session: {session_file_path}")
                 except Exception as e:
                     logger.warning(f"⚠️ 读取 session 文件失败: {e}")
             else:
@@ -15163,7 +15895,8 @@ class TelegramBot:
         if self.downloader.proxy_host:
             logger.info(f"Telegram Bot 使用代理: {self.downloader.proxy_host}")
             self.application = (
-                Application.builder().token(self.token).proxy(self.downloader.proxy_host).post_init(self.post_init).build()
+                Application.builder().token(self.token).proxy(
+                    self.downloader.proxy_host).post_init(self.post_init).build()
             )
         else:
             logger.info("Telegram Bot 直接连接")
@@ -15198,7 +15931,8 @@ class TelegramBot:
                         subscriptions = self.fav_manager.load_subscriptions()
                         if subscriptions:
                             self.fav_manager.ensure_check_task_running()
-                            logger.info(f"📚 发现 {len(subscriptions)} 个订阅，已启动定期检查任务")
+                            logger.info(
+                                f"📚 发现 {len(subscriptions)} 个订阅，已启动定期检查任务")
                     except Exception as e:
                         logger.warning(f"⚠️ 启动B站收藏夹订阅检查任务失败: {e}")
                 else:
@@ -15255,7 +15989,8 @@ class TelegramBot:
 
     async def _keep_alive_heartbeat(self):
         """保持连接活跃的心跳机制"""
-        heartbeat_interval = int(os.getenv("HEARTBEAT_INTERVAL", "300"))  # 5分钟发送一次心跳
+        heartbeat_interval = int(
+            os.getenv("HEARTBEAT_INTERVAL", "300"))  # 5分钟发送一次心跳
 
         while True:
             try:
@@ -15298,44 +16033,46 @@ class TelegramBot:
                 logger.info("🐳 Docker容器环境")
 
                 # 检查是否映射了Docker socket
-                docker_sock_paths = ['/var/run/docker.sock', '/var/run/docker.sock.raw']
-                has_docker_sock = any(os.path.exists(path) for path in docker_sock_paths)
+                docker_sock_paths = [
+                    '/var/run/docker.sock', '/var/run/docker.sock.raw']
+                has_docker_sock = any(os.path.exists(path)
+                                      for path in docker_sock_paths)
 
                 if has_docker_sock:
-                        logger.info("🔌 检测到Docker socket映射，使用Docker SDK重启")
+                    logger.info("🔌 检测到Docker socket映射，使用Docker SDK重启")
 
+                    await update.message.reply_text(
+                        "🐳 Docker环境 + Socket映射\n"
+                        "🔄 使用Docker SDK自动重启容器...\n"
+                        "⏳ 请等待约30秒让服务重新启动"
+                    )
+                    await asyncio.sleep(2)
+
+                    try:
+                        # 使用Docker SDK重启方法
+                        await self._restart_via_docker_api()
+                        logger.info("✅ 通过Docker SDK重启成功")
+
+                    except Exception as e:
+                        # 限制错误消息长度，避免Telegram消息过长
+                        error_msg = str(e)
+                        if len(error_msg) > 100:
+                            error_msg = error_msg[:100] + "..."
+
+                        logger.error(f"❌ Docker SDK重启失败: {error_msg}")
                         await update.message.reply_text(
-                            "🐳 Docker环境 + Socket映射\n"
-                            "🔄 使用Docker SDK自动重启容器...\n"
-                            "⏳ 请等待约30秒让服务重新启动"
+                            f"❌ SDK重启失败\n\n"
+                            "📋 备用方案:\n"
+                            "1. 手动重启: `docker restart <容器名>`\n"
+                            "2. 或执行优雅退出让容器自动重启"
                         )
+
+                        # 优雅退出作为备用方案
                         await asyncio.sleep(2)
-
-                        try:
-                            # 使用Docker SDK重启方法
-                            await self._restart_via_docker_api()
-                            logger.info("✅ 通过Docker SDK重启成功")
-
-                        except Exception as e:
-                            # 限制错误消息长度，避免Telegram消息过长
-                            error_msg = str(e)
-                            if len(error_msg) > 100:
-                                error_msg = error_msg[:100] + "..."
-
-                            logger.error(f"❌ Docker SDK重启失败: {error_msg}")
-                            await update.message.reply_text(
-                                f"❌ SDK重启失败\n\n"
-                                "📋 备用方案:\n"
-                                "1. 手动重启: `docker restart <容器名>`\n"
-                                "2. 或执行优雅退出让容器自动重启"
-                            )
-
-                            # 优雅退出作为备用方案
-                            await asyncio.sleep(2)
-                            await update.message.reply_text("🔄 执行优雅退出...")
-                            await asyncio.sleep(1)
-                            import sys
-                            sys.exit(0)
+                        await update.message.reply_text("🔄 执行优雅退出...")
+                        await asyncio.sleep(1)
+                        import sys
+                        sys.exit(0)
                 else:
                     logger.info("❌ 未检测到Docker socket映射")
                     await update.message.reply_text(
@@ -15410,7 +16147,8 @@ class TelegramBot:
 
             # 方法1: 通过cpuset获取容器ID
             try:
-                container_id = os.popen("basename $(cat /proc/1/cpuset)").read().strip()
+                container_id = os.popen(
+                    "basename $(cat /proc/1/cpuset)").read().strip()
                 if container_id and len(container_id) >= 12:
                     logger.info(f"📋 通过cpuset获取容器ID: {container_id[:12]}...")
                     container = client.containers.get(container_id)
@@ -15425,7 +16163,8 @@ class TelegramBot:
                 try:
                     hostname_id = os.popen("hostname").read().strip()
                     if hostname_id and len(hostname_id) >= 12:
-                        logger.info(f"📋 通过hostname获取容器ID: {hostname_id[:12]}...")
+                        logger.info(
+                            f"📋 通过hostname获取容器ID: {hostname_id[:12]}...")
                         container = client.containers.get(hostname_id)
                         container_id = hostname_id
                 except Exception as e:
@@ -15435,7 +16174,8 @@ class TelegramBot:
             if not container:
                 try:
                     logger.info("📋 尝试查找savextube容器...")
-                    containers = client.containers.list(filters={"name": "savextube"})
+                    containers = client.containers.list(
+                        filters={"name": "savextube"})
                     if containers:
                         container = containers[0]
                         container_id = container.id
@@ -15565,19 +16305,23 @@ class TelegramBot:
         try:
             # 检查是否有正在进行的下载任务
             logger.info(f"🔍 用户 {user_id} 请求取消任务")
-            logger.info(f"🔍 当前任务数量: {len(self.download_tasks) if hasattr(self, 'download_tasks') else 0}")
+            logger.info(
+                f"🔍 当前任务数量: {len(self.download_tasks) if hasattr(self, 'download_tasks') else 0}")
 
             if hasattr(self, 'download_tasks') and self.download_tasks:
                 # 打印所有任务信息用于调试
                 for tid, tinfo in self.download_tasks.items():
-                    logger.info(f"🔍 任务 {tid}: user_id={tinfo.get('user_id')}, done={tinfo.get('task').done() if tinfo.get('task') else 'None'}")
+                    logger.info(
+                        f"🔍 任务 {tid}: user_id={tinfo.get('user_id')}, done={tinfo.get('task').done() if tinfo.get('task') else 'None'}")
 
                 cancelled_count = 0
                 for task_id, task_info in list(self.download_tasks.items()):
                     task_user_id = task_info.get('user_id')
-                    task_done = task_info.get('task').done() if task_info.get('task') else True
+                    task_done = task_info.get('task').done(
+                    ) if task_info.get('task') else True
 
-                    logger.info(f"🔍 检查任务 {task_id}: user_id={task_user_id}, done={task_done}, 匹配用户={task_user_id == user_id}")
+                    logger.info(
+                        f"🔍 检查任务 {task_id}: user_id={task_user_id}, done={task_done}, 匹配用户={task_user_id == user_id}")
 
                     if task_user_id == user_id and not task_done:
                         logger.info(f"🚫 取消任务: {task_id}")
@@ -15666,7 +16410,8 @@ class TelegramBot:
                     douyin_files.extend(
                         self.downloader.douyin_download_path.glob(ext)
                     )
-            total_files = len(x_files) + len(youtube_files) + len(bilibili_files) + len(douyin_files)
+            total_files = len(x_files) + len(youtube_files) + \
+                len(bilibili_files) + len(douyin_files)
             status_text = (
                 f"📊 <b>下载状态</b>\n\n"
                 f"  - <b>X (Twitter)</b>: {len(x_files)} 个文件\n"
@@ -15717,14 +16462,16 @@ class TelegramBot:
         elif message.text and "magnet:" in message.text:
             # 从混合文本中提取磁力链接
             import re
-            magnet_match = re.search(r'magnet:\?xt=urn:btih:[a-fA-F0-9]{32,40}[^\s]*', message.text)
+            magnet_match = re.search(
+                r'magnet:\?xt=urn:btih:[a-fA-F0-9]{32,40}[^\s]*', message.text)
             if magnet_match:
                 url = magnet_match.group(0)
                 logger.info(f"🔧 从混合文本中提取磁力链接: {message.text} -> {url}")
         elif message.text and ".torrent" in message.text:
             # 从混合文本中提取种子文件链接
             import re
-            torrent_match = re.search(r'https?://[^\s]*\.torrent[^\s]*', message.text)
+            torrent_match = re.search(
+                r'https?://[^\s]*\.torrent[^\s]*', message.text)
             if torrent_match:
                 url = torrent_match.group(0)
                 logger.info(f"🔧 从混合文本中提取种子文件链接: {message.text} -> {url}")
@@ -15742,7 +16489,8 @@ class TelegramBot:
             import re
 
             # 首先使用智能提取方法
-            extracted_urls = self.downloader.extract_urls_from_text(message.text)
+            extracted_urls = self.downloader.extract_urls_from_text(
+                message.text)
             if extracted_urls:
                 url = extracted_urls[0]  # 使用第一个找到的URL
                 logger.info(f"🔧 智能提取URL: {message.text} -> {url}")
@@ -15760,23 +16508,27 @@ class TelegramBot:
             if message.text and ("http" in message.text or "tp://" in message.text or "magnet:" in message.text):
                 import re
                 # 首先尝试提取磁力链接
-                magnet_match = re.search(r'magnet:\?xt=urn:btih:[a-fA-F0-9]{32,40}[^\s]*', message.text)
+                magnet_match = re.search(
+                    r'magnet:\?xt=urn:btih:[a-fA-F0-9]{32,40}[^\s]*', message.text)
                 if magnet_match:
                     url = magnet_match.group(0)
                     logger.info(f"🔧 转发消息中提取磁力链接: {message.text} -> {url}")
                 else:
                     # 尝试提取种子文件链接
-                    torrent_match = re.search(r'https?://[^\s]*\.torrent[^\s]*', message.text)
+                    torrent_match = re.search(
+                        r'https?://[^\s]*\.torrent[^\s]*', message.text)
                     if torrent_match:
                         url = torrent_match.group(0)
-                        logger.info(f"🔧 转发消息中提取种子文件链接: {message.text} -> {url}")
+                        logger.info(
+                            f"🔧 转发消息中提取种子文件链接: {message.text} -> {url}")
                     else:
                         # 修复错误的协议
                         fixed_text = message.text.replace("tp://", "http://")
                         url_match = re.search(r'https?://[^\s]+', fixed_text)
                         if url_match:
                             url = url_match.group(0)
-                            logger.info(f"🔧 转发消息中修复了错误的URL协议: {message.text} -> {url}")
+                            logger.info(
+                                f"🔧 转发消息中修复了错误的URL协议: {message.text} -> {url}")
 
         # 检查回复的消息
         if not url and message.reply_to_message:
@@ -15784,23 +16536,27 @@ class TelegramBot:
             if reply_msg.text and ("http" in reply_msg.text or "tp://" in reply_msg.text or "magnet:" in reply_msg.text):
                 import re
                 # 首先尝试提取磁力链接
-                magnet_match = re.search(r'magnet:\?xt=urn:btih:[a-fA-F0-9]{32,40}[^\s]*', reply_msg.text)
+                magnet_match = re.search(
+                    r'magnet:\?xt=urn:btih:[a-fA-F0-9]{32,40}[^\s]*', reply_msg.text)
                 if magnet_match:
                     url = magnet_match.group(0)
                     logger.info(f"🔧 回复消息中提取磁力链接: {reply_msg.text} -> {url}")
                 else:
                     # 尝试提取种子文件链接
-                    torrent_match = re.search(r'https?://[^\s]*\.torrent[^\s]*', reply_msg.text)
+                    torrent_match = re.search(
+                        r'https?://[^\s]*\.torrent[^\s]*', reply_msg.text)
                     if torrent_match:
                         url = torrent_match.group(0)
-                        logger.info(f"🔧 回复消息中提取种子文件链接: {reply_msg.text} -> {url}")
+                        logger.info(
+                            f"🔧 回复消息中提取种子文件链接: {reply_msg.text} -> {url}")
                     else:
                         # 修复错误的协议
                         fixed_text = reply_msg.text.replace("tp://", "http://")
                         url_match = re.search(r'https?://[^\s]+', fixed_text)
                         if url_match:
                             url = url_match.group(0)
-                            logger.info(f"🔧 回复消息中修复了错误的URL协议: {reply_msg.text} -> {url}")
+                            logger.info(
+                                f"🔧 回复消息中修复了错误的URL协议: {reply_msg.text} -> {url}")
             elif reply_msg.entities:
                 for entity in reply_msg.entities:
                     if entity.type == "url":
@@ -15863,7 +16619,7 @@ class TelegramBot:
             try:
                 # 调用网易云音乐搜索下载
                 result = await self._search_and_download_ncm(keyword, status_message)
-                
+
                 if result.get('success'):
                     await status_message.edit_text(f"✅ 搜索下载完成！\n\n🔍 关键词: {keyword}\n📁 保存位置: {result.get('download_path', '未知')}", parse_mode=None)
                 else:
@@ -15999,9 +16755,11 @@ class TelegramBot:
 
                     # 格式化时间
                     import time
-                    added_str = time.strftime('%Y-%m-%d %H:%M', time.localtime(added_time))
+                    added_str = time.strftime(
+                        '%Y-%m-%d %H:%M', time.localtime(added_time))
                     if last_check > 0:
-                        last_check_str = time.strftime('%Y-%m-%d %H:%M', time.localtime(last_check))
+                        last_check_str = time.strftime(
+                            '%Y-%m-%d %H:%M', time.localtime(last_check))
                     else:
                         last_check_str = "未检查"
 
@@ -16125,10 +16883,12 @@ class TelegramBot:
 
                     # 从媒体消息文本中提取磁力链接
                     import re
-                    magnet_match = re.search(r'magnet:\?xt=urn:btih:[a-fA-F0-9]{32,40}[^\s]*', caption_text)
+                    magnet_match = re.search(
+                        r'magnet:\?xt=urn:btih:[a-fA-F0-9]{32,40}[^\s]*', caption_text)
                     if magnet_match:
                         magnet_url = magnet_match.group(0)
-                        logger.info(f"🔧 从媒体消息文本中提取磁力链接: {caption_text} -> {magnet_url}")
+                        logger.info(
+                            f"🔧 从媒体消息文本中提取磁力链接: {caption_text} -> {magnet_url}")
                         await status_message.edit_text("🔗 正在添加到 qBittorrent...", parse_mode=None)
 
                         # 尝试添加到 qBittorrent
@@ -16153,10 +16913,12 @@ class TelegramBot:
                         return True  # 表示已处理
 
                     # 尝试提取种子文件链接
-                    torrent_match = re.search(r'https?://[^\s]*\.torrent[^\s]*', caption_text)
+                    torrent_match = re.search(
+                        r'https?://[^\s]*\.torrent[^\s]*', caption_text)
                     if torrent_match:
                         torrent_url = torrent_match.group(0)
-                        logger.info(f"🔧 从媒体消息文本中提取种子文件链接: {caption_text} -> {torrent_url}")
+                        logger.info(
+                            f"🔧 从媒体消息文本中提取种子文件链接: {caption_text} -> {torrent_url}")
                         await status_message.edit_text("🔗 正在添加到 qBittorrent...", parse_mode=None)
 
                         # 尝试添加到 qBittorrent
@@ -16232,14 +16994,16 @@ class TelegramBot:
         # --- 进度回调 ---
         last_update_time = {"time": time.time()}
         last_progress_percent = {"value": 0}
-        progress_state = {"last_stage": None, "last_percent": 0, "finished_shown": False}  # 跟踪上一次的状态和是否已显示完成
+        progress_state = {"last_stage": None, "last_percent": 0,
+                          "finished_shown": False}  # 跟踪上一次的状态和是否已显示完成
         last_progress_text = {"text": ""}  # 跟踪上一次的文本内容
 
         # 创建增强版的消息更新器函数，支持传递 status_message 和 context 给 single_video_progress_hook
         # 增加对B站多P下载的支持，但保持YouTube功能完全不变
         async def message_updater(text_or_dict, bilibili_progress_data=None):
             try:
-                logger.info(f"🔍 message_updater 被调用，参数类型: {type(text_or_dict)}")
+                logger.info(
+                    f"🔍 message_updater 被调用，参数类型: {type(text_or_dict)}")
                 logger.info(f"🔍 message_updater 参数内容: {text_or_dict}")
 
                 # 如果已经显示完成状态，忽略所有后续调用
@@ -16267,8 +17031,10 @@ class TelegramBot:
                             # 如果提供了bilibili_progress_data，记录B站下载的文件
                             if bilibili_progress_data is not None and isinstance(bilibili_progress_data, dict):
                                 if 'downloaded_files' not in bilibili_progress_data:
-                                    bilibili_progress_data['downloaded_files'] = []
-                                bilibili_progress_data['downloaded_files'].append(filename)
+                                    bilibili_progress_data['downloaded_files'] = [
+                                    ]
+                                bilibili_progress_data['downloaded_files'].append(
+                                    filename)
                                 logger.info(f"📝 B站文件记录: {filename}")
                             else:
                                 # YouTube或其他平台的处理保持不变
@@ -16328,7 +17094,8 @@ class TelegramBot:
         # 更新状态消息
         try:
             if message_updater:
-                logger.debug(f'message_updater type: {type(message_updater)}, value: {message_updater}')
+                logger.debug(
+                    f'message_updater type: {type(message_updater)}, value: {message_updater}')
                 if asyncio.iscoroutinefunction(message_updater):
                     await message_updater("🔍 正在分析链接...")
                 else:
@@ -16338,7 +17105,8 @@ class TelegramBot:
         # 直接开始下载，跳过预先获取信息（避免用户等待）
         try:
             if message_updater:
-                logger.debug(f'message_updater type: {type(message_updater)}, value: {message_updater}')
+                logger.debug(
+                    f'message_updater type: {type(message_updater)}, value: {message_updater}')
                 if asyncio.iscoroutinefunction(message_updater):
                     await message_updater("🚀 正在启动下载...")
                 else:
@@ -16378,9 +17146,11 @@ class TelegramBot:
             # 支持字符串类型，直接发到Telegram
             if isinstance(d, str):
                 try:
-                    logger.info(f"🔍 [DEBUG] 准备发送字符串到TG: status_message={status_message}, loop={loop}")
+                    logger.info(
+                        f"🔍 [DEBUG] 准备发送字符串到TG: status_message={status_message}, loop={loop}")
                     if status_message is None:
-                        logger.warning(f"⚠️ [DEBUG] status_message 是 None，跳过发送")
+                        logger.warning(
+                            f"⚠️ [DEBUG] status_message 是 None，跳过发送")
                         return
                     if loop is None:
                         logger.warning(f"⚠️ [DEBUG] loop 是 None，跳过发送")
@@ -16397,14 +17167,16 @@ class TelegramBot:
                 return
             # 添加类型检查，确保d是字典类型
             if not isinstance(d, dict):
-                logger.warning(f"update_progress接收到非字典类型参数: {type(d)}, 内容: {d}")
+                logger.warning(
+                    f"update_progress接收到非字典类型参数: {type(d)}, 内容: {d}")
                 return
 
             # 更新 progress_data（参考 main.v0.3.py）
             try:
                 if d['status'] == 'downloading':
                     raw_filename = d.get('filename', '')
-                    display_filename = os.path.basename(raw_filename) if raw_filename else 'video.mp4'
+                    display_filename = os.path.basename(
+                        raw_filename) if raw_filename else 'video.mp4'
                     progress_data.update({
                         'filename': display_filename,
                         'total_bytes': d.get('total_bytes') or d.get('total_bytes_estimate', 0),
@@ -16415,7 +17187,8 @@ class TelegramBot:
                     })
                 elif d['status'] == 'finished':
                     final_filename = d.get('filename', '')
-                    display_filename = os.path.basename(final_filename) if final_filename else 'video.mp4'
+                    display_filename = os.path.basename(
+                        final_filename) if final_filename else 'video.mp4'
                     progress_data.update({
                         'filename': display_filename,
                         'status': 'finished',
@@ -16475,7 +17248,8 @@ class TelegramBot:
                 index = d.get('index', 0)
                 total = d.get('total', 0)
                 status_emoji = "✅" if d.get('status') == 'finished' else "❌"
-                status_text = "下载成功" if d.get('status') == 'finished' else "下载失败"
+                status_text = "下载成功" if d.get(
+                    'status') == 'finished' else "下载失败"
 
                 progress_text = (
                     f"{status_emoji} **第{index}个{status_text}**: `{filename}`\n"
@@ -16527,7 +17301,9 @@ class TelegramBot:
                 # 显示完成信息
                 display_filename = _clean_filename_for_display_local(filename)
                 progress_bar = _create_progress_bar_local(100.0)
-                size_mb = total_bytes / (1024 * 1024) if total_bytes > 0 else downloaded_bytes / (1024 * 1024)
+                size_mb = total_bytes / \
+                    (1024 * 1024) if total_bytes > 0 else downloaded_bytes / \
+                    (1024 * 1024)
 
                 completion_text = (
                     f"📝 文件：{display_filename}\n"
@@ -16551,7 +17327,8 @@ class TelegramBot:
                 logger.debug(f"收到下载进度回调: {d}")
                 last_update_time['time'] = now
 
-                total_bytes = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+                total_bytes = d.get('total_bytes') or d.get(
+                    'total_bytes_estimate', 0)
                 downloaded_bytes = d.get('downloaded_bytes', 0)
                 speed_bytes_s = d.get('speed', 0)
                 eta_seconds = d.get('eta', 0)
@@ -16580,8 +17357,10 @@ class TelegramBot:
                         eta_text = "未知"
 
                     # 确保文件名不包含路径
-                    display_filename = os.path.basename(filename) if filename else 'video.mp4'
-                    display_filename = _clean_filename_for_display_local(display_filename)
+                    display_filename = os.path.basename(
+                        filename) if filename else 'video.mp4'
+                    display_filename = _clean_filename_for_display_local(
+                        display_filename)
                     downloaded_mb = downloaded_bytes / (1024 * 1024)
                     progress_text = (
                         f"📥 下载中\n"
@@ -16602,11 +17381,14 @@ class TelegramBot:
                     asyncio.run_coroutine_threadsafe(do_update(), loop)
                 else:
                     # 没有总大小信息时的处理
-                    downloaded_mb = downloaded_bytes / (1024 * 1024) if downloaded_bytes > 0 else 0
+                    downloaded_mb = downloaded_bytes / \
+                        (1024 * 1024) if downloaded_bytes > 0 else 0
                     speed_mb = (speed_bytes_s or 0) / (1024 * 1024)
                     # 确保文件名不包含路径
-                    display_filename = os.path.basename(filename) if filename else 'video.mp4'
-                    display_filename = _clean_filename_for_display_local(display_filename)
+                    display_filename = os.path.basename(
+                        filename) if filename else 'video.mp4'
+                    display_filename = _clean_filename_for_display_local(
+                        display_filename)
                     progress_text = (
                         f"📥 下载中\n"
                         f"📝 文件名: {display_filename}\n"
@@ -16629,17 +17411,17 @@ class TelegramBot:
         # 检查是否为YouTube Music URL，如果是则使用专门的下载器
         if self.downloader.is_youtube_music_url(url) and YouTubeMusicDownloader:
             logger.info(f"🎵 检测到YouTube Music URL，使用专门的下载器: {url}")
-            
+
             # 创建YouTube Music下载任务
             try:
                 youtube_music_downloader = YouTubeMusicDownloader()
-                
+
                 # 检查是否为播放列表
                 if 'list=' in url:
                     logger.info("🎵 检测到YouTube Music播放列表，开始下载...")
                     download_task = asyncio.create_task(
                         youtube_music_downloader.download_playlist(
-                            url, 
+                            url,
                             progress_callback=update_progress
                         )
                     )
@@ -16647,7 +17429,7 @@ class TelegramBot:
                     logger.info("🎵 检测到YouTube Music单曲，开始下载...")
                     download_task = asyncio.create_task(
                         youtube_music_downloader.download_track(
-                            url, 
+                            url,
                             progress_callback=update_progress
                         )
                     )
@@ -16707,7 +17489,8 @@ class TelegramBot:
             # 检查是否为B站合集下载
             platform_value = result.get("platform", "")
             logger.info(f"Platform值: '{platform_value}'")
-            logger.info(f"是否包含Bilibili: {'bilibili' in platform_value.lower()}")
+            logger.info(
+                f"是否包含Bilibili: {'bilibili' in platform_value.lower()}")
 
             # 更宽松的B站检测条件
             is_bilibili_playlist = (
@@ -16716,7 +17499,8 @@ class TelegramBot:
                 (result.get("video_type") == "user_all_videos" and "bilibili" in platform_value.lower()) or
                 (result.get("is_playlist") and platform_value.lower() == "bilibili") or
                 (result.get("is_playlist") and "bilibili" in str(result).lower()) or
-                (result.get("download_path", "").startswith("/downloads/Bilibili") and result.get("is_playlist"))
+                (result.get("download_path", "").startswith(
+                    "/downloads/Bilibili") and result.get("is_playlist"))
             )
 
             # 检查是否为B站UP主所有视频下载（类似YouTube频道）
@@ -16733,7 +17517,8 @@ class TelegramBot:
                     # UP主所有合集下载完成
                     uid = result.get("uid", "未知")
                     total_collections = result.get("total_collections", 0)
-                    downloaded_collections = result.get("downloaded_collections", 0)
+                    downloaded_collections = result.get(
+                        "downloaded_collections", 0)
                     file_count = result.get("file_count", 0)
                     total_size_mb = result.get("total_size_mb", 0)
                     download_path = result.get("download_path", "")
@@ -16770,7 +17555,8 @@ class TelegramBot:
                         logger.info("UP主所有合集下载完成消息发送成功")
                     except Exception as e:
                         if "Flood control" in str(e):
-                            logger.warning("UP主合集下载完成消息遇到Flood control，等待5秒后重试...")
+                            logger.warning(
+                                "UP主合集下载完成消息遇到Flood control，等待5秒后重试...")
                             await asyncio.sleep(5)
                             try:
                                 await status_message.edit_text(success_text, parse_mode=None)
@@ -16841,7 +17627,8 @@ class TelegramBot:
                 episode_count_str = str(episode_count)
 
                 # 获取PART文件统计信息
-                success_count = result.get("success_count", file_count)  # 使用file_count作为默认值
+                success_count = result.get(
+                    "success_count", file_count)  # 使用file_count作为默认值
                 part_count = result.get("part_count", 0)
 
                 # 构建统计信息
@@ -16859,7 +17646,8 @@ class TelegramBot:
                     # 解析分辨率
                     try:
                         # 处理多个分辨率的情况（用逗号分隔）
-                        resolutions = [r.strip() for r in resolution_str.split(',')]
+                        resolutions = [r.strip()
+                                       for r in resolution_str.split(',')]
                         labeled_resolutions = []
 
                         for res in resolutions:
@@ -16874,8 +17662,10 @@ class TelegramBot:
 
                                         # 使用正则表达式提取数字
                                         import re
-                                        width_match = re.search(r'(\d+)', width_str)
-                                        height_match = re.search(r'(\d+)', height_str)
+                                        width_match = re.search(
+                                            r'(\d+)', width_str)
+                                        height_match = re.search(
+                                            r'(\d+)', height_str)
 
                                         if width_match and height_match:
                                             width = int(width_match.group(1))
@@ -16896,10 +17686,13 @@ class TelegramBot:
                                                 quality = "标清"
 
                                             # 检查是否已经包含质量标识，避免重复添加
-                                            quality_patterns = [r'\(8K\)', r'\(4K\)', r'\(2K\)', r'\(1080[Pp]\)', r'\(720[Pp]\)', r'\(480[Pp]\)', r'\(360[Pp]\)', r'\(\d+[Pp]\)', r'\(标清\)']
-                                            has_quality = any(re.search(pattern, res) for pattern in quality_patterns)
+                                            quality_patterns = [
+                                                r'\(8K\)', r'\(4K\)', r'\(2K\)', r'\(1080[Pp]\)', r'\(720[Pp]\)', r'\(480[Pp]\)', r'\(360[Pp]\)', r'\(\d+[Pp]\)', r'\(标清\)']
+                                            has_quality = any(
+                                                re.search(pattern, res) for pattern in quality_patterns)
                                             if not has_quality:
-                                                labeled_resolutions.append(f"{res} ({quality})")
+                                                labeled_resolutions.append(
+                                                    f"{res} ({quality})")
                                             else:
                                                 labeled_resolutions.append(res)
                                         else:
@@ -16938,9 +17731,11 @@ class TelegramBot:
                                             r'\(8K\)', r'\(4K\)', r'\(2K\)', r'\(1080[Pp]\)', r'\(720[Pp]\)', r'\(480[Pp]\)', r'\(360[Pp]\)', r'\(\d+[Pp]\)',
                                             r'8K$', r'4K$', r'2K$', r'1080[Pp]$', r'720[Pp]$', r'480[Pp]$', r'360[Pp]$', r'\d+[Pp]$'
                                         ]
-                                        has_quality = any(re.search(pattern, res) for pattern in quality_patterns)
+                                        has_quality = any(
+                                            re.search(pattern, res) for pattern in quality_patterns)
                                         if not has_quality:
-                                            labeled_resolutions.append(f"{res} ({quality})")
+                                            labeled_resolutions.append(
+                                                f"{res} ({quality})")
                                         else:
                                             labeled_resolutions.append(res)
                                     else:
@@ -17063,18 +17858,20 @@ class TelegramBot:
                     download_path = result.get("download_path", "")
 
                     # 计算总文件大小和PART文件统计
-                    total_size_mb = sum(stat.get('total_size_mb', 0) for stat in playlist_stats)
+                    total_size_mb = sum(stat.get('total_size_mb', 0)
+                                        for stat in playlist_stats)
                     total_size_gb = total_size_mb / 1024
 
                     # 计算总的成功和未完成文件数量
-                    total_success_count = sum(stat.get('success_count', stat.get('video_count', 0)) for stat in playlist_stats)
-                    total_part_count = sum(stat.get('part_count', 0) for stat in playlist_stats)
+                    total_success_count = sum(stat.get('success_count', stat.get(
+                        'video_count', 0)) for stat in playlist_stats)
+                    total_part_count = sum(stat.get('part_count', 0)
+                                           for stat in playlist_stats)
 
                     # 计算总计数量和失败数量
-                    total_video_count = sum(stat.get('video_count', 0) for stat in playlist_stats)
+                    total_video_count = sum(stat.get('video_count', 0)
+                                            for stat in playlist_stats)
                     total_failed_count = total_video_count - total_success_count
-
-
 
                     # 格式化总大小显示 - 只显示一个单位
                     if total_size_gb >= 1.0:
@@ -17135,8 +17932,10 @@ class TelegramBot:
                         if downloaded_files:
                             # 有详细文件信息，使用增强显示
                             title = "🎬 视频下载完成"
-                            playlist_title = result.get("playlist_title", "YouTube播放列表")
-                            video_count = result.get("video_count", len(downloaded_files))
+                            playlist_title = result.get(
+                                "playlist_title", "YouTube播放列表")
+                            video_count = result.get(
+                                "video_count", len(downloaded_files))
                             total_size_mb = result.get("total_size_mb", 0)
                             resolution = result.get("resolution", "未知")
                             download_path = result.get("download_path", "")
@@ -17154,7 +17953,8 @@ class TelegramBot:
                             )
 
                             # 获取PART文件统计信息
-                            success_count = result.get("success_count", video_count)
+                            success_count = result.get(
+                                "success_count", video_count)
                             part_count = result.get("part_count", 0)
 
                             # 构建统计信息
@@ -17181,15 +17981,18 @@ class TelegramBot:
                         else:
                             # 没有详细文件信息，使用简单显示
                             title = "📋 YouTube播放列表下载完成"
-                            playlist_title = result.get("playlist_title", "未知播放列表")
+                            playlist_title = result.get(
+                                "playlist_title", "未知播放列表")
                             video_count = result.get("video_count", 0)
                             download_path = result.get("download_path", "")
 
                             # 检查是否已经下载过
                             if result.get("already_downloaded", False):
                                 title = "📋 YouTube播放列表已存在"
-                                completion_rate = result.get("completion_rate", 100)
-                                completion_str = f"{completion_rate:.1f}".replace('.', r'\.')
+                                completion_rate = result.get(
+                                    "completion_rate", 100)
+                                completion_str = f"{completion_rate:.1f}".replace(
+                                    '.', r'\.')
 
                                 success_text = (
                                     f"{(title)}\n\n"
@@ -17225,45 +18028,58 @@ class TelegramBot:
                                                 video_files = []
                                                 for file_path in playlist_dir.glob("*"):
                                                     if file_path.is_file() and file_path.suffix.lower() in ['.mp4', '.mkv', '.webm', '.avi', '.mov']:
-                                                        video_files.append(file_path)
+                                                        video_files.append(
+                                                            file_path)
 
                                                 if video_files:
                                                     # 构建文件名列表
                                                     filename_lines = []
                                                     for i, file_path in enumerate(sorted(video_files), 1):
-                                                        filename_lines.append(f"  {i:02d}. {file_path.name}")
-                                                    filename_display = '\n'.join(filename_lines)
-                                                    logger.info(f"✅ 从播放列表目录找到 {len(video_files)} 个文件")
+                                                        filename_lines.append(
+                                                            f"  {i:02d}. {file_path.name}")
+                                                    filename_display = '\n'.join(
+                                                        filename_lines)
+                                                    logger.info(
+                                                        f"✅ 从播放列表目录找到 {len(video_files)} 个文件")
                                         else:
                                             # 如果没有播放列表标题，遍历根目录
                                             video_files = []
                                             for file_path in download_dir.glob("*"):
                                                 if file_path.is_file() and file_path.suffix.lower() in ['.mp4', '.mkv', '.webm', '.avi', '.mov']:
-                                                    video_files.append(file_path)
+                                                    video_files.append(
+                                                        file_path)
 
                                             if video_files:
                                                 # 构建文件名列表
                                                 filename_lines = []
                                                 for i, file_path in enumerate(sorted(video_files), 1):
-                                                    filename_lines.append(f"  {i:02d}. {file_path.name}")
-                                                filename_display = '\n'.join(filename_lines)
-                                                logger.info(f"✅ 从根目录找到 {len(video_files)} 个文件")
+                                                    filename_lines.append(
+                                                        f"  {i:02d}. {file_path.name}")
+                                                filename_display = '\n'.join(
+                                                    filename_lines)
+                                                logger.info(
+                                                    f"✅ 从根目录找到 {len(video_files)} 个文件")
 
                                         # 如果仍然没有找到文件，尝试递归遍历
                                         if not filename_display:
-                                            logger.warning("⚠️ 未找到文件，尝试递归遍历所有子目录")
+                                            logger.warning(
+                                                "⚠️ 未找到文件，尝试递归遍历所有子目录")
                                             video_files = []
                                             for file_path in download_dir.rglob("*"):
                                                 if file_path.is_file() and file_path.suffix.lower() in ['.mp4', '.mkv', '.webm', '.avi', '.mov']:
-                                                    video_files.append(file_path)
+                                                    video_files.append(
+                                                        file_path)
 
                                             if video_files:
                                                 # 构建文件名列表
                                                 filename_lines = []
                                                 for i, file_path in enumerate(sorted(video_files), 1):
-                                                    filename_lines.append(f"  {i:02d}. {file_path.name}")
-                                                filename_display = '\n'.join(filename_lines)
-                                                logger.info(f"✅ 递归找到 {len(video_files)} 个文件")
+                                                    filename_lines.append(
+                                                        f"  {i:02d}. {file_path.name}")
+                                                filename_display = '\n'.join(
+                                                    filename_lines)
+                                                logger.info(
+                                                    f"✅ 递归找到 {len(video_files)} 个文件")
 
                                     except Exception as e:
                                         logger.error(f"获取文件名时出错: {e}")
@@ -17309,18 +18125,21 @@ class TelegramBot:
                 # 单文件下载，使用原有逻辑
                 # 根据结果构建成功消息
                 resolution = result.get("resolution", "未知")
-                
+
                 # 修复小红书图片下载完成消息显示问题
                 # 小红书下载器返回的结果中没有resolution字段，只有content_type字段
                 # 只在确实是小红书平台时才执行图片检测逻辑
                 if platform.lower() == 'xiaohongshu' or result.get('platform') == 'Xiaohongshu':
-                    logger.info(f"🔍 [_process_download_async] 检查小红书图片 - content_type: {result.get('content_type')}, resolution: {resolution}")
+                    logger.info(
+                        f"🔍 [_process_download_async] 检查小红书图片 - content_type: {result.get('content_type')}, resolution: {resolution}")
                 if result.get('content_type') == 'image' and resolution == '未知':
                     resolution = '图片'
-                    logger.info(f"✅ [_process_download_async] 小红书图片检测成功，设置resolution为: {resolution}")
+                    logger.info(
+                        f"✅ [_process_download_async] 小红书图片检测成功，设置resolution为: {resolution}")
                 else:
-                    logger.info(f"🔍 [_process_download_async] 非小红书平台，跳过图片检测 - platform: {platform}, content_type: {result.get('content_type')}")
-                    
+                    logger.info(
+                        f"🔍 [_process_download_async] 非小红书平台，跳过图片检测 - platform: {platform}, content_type: {result.get('content_type')}")
+
                 abr = result.get("abr")
 
                 # 根据分辨率判断是视频还是音频
@@ -17330,7 +18149,8 @@ class TelegramBot:
                     size_str = f"{result['total_size_mb']:.2f}"
                     files_count = result.get("files_count", 1)
                     file_formats = result.get("file_formats", [])
-                    format_str = ", ".join(file_formats) if file_formats else "未知格式"
+                    format_str = ", ".join(
+                        file_formats) if file_formats else "未知格式"
 
                     # 构建文件名列表
                     files_info = result.get("files", [])
@@ -17342,21 +18162,26 @@ class TelegramBot:
                             for i, file_info in enumerate(files_info, 1):
                                 # 从path中提取文件名
                                 file_path = file_info.get('path', f'图片{i}')
-                                filename = os.path.basename(file_path) if file_path else f'图片{i}'
+                                filename = os.path.basename(
+                                    file_path) if file_path else f'图片{i}'
                                 filenames_text += f"  `{i}. {filename}`\n"
                         else:
                             # 文件数量较多，只显示前3个和后1个
                             filenames_text = "\n📝 **文件名**:\n"
                             for i in range(min(3, len(files_info))):
-                                file_path = files_info[i].get('path', f'图片{i+1}')
-                                filename = os.path.basename(file_path) if file_path else f'图片{i+1}'
+                                file_path = files_info[i].get(
+                                    'path', f'图片{i+1}')
+                                filename = os.path.basename(
+                                    file_path) if file_path else f'图片{i+1}'
                                 filenames_text += f"  `{i+1}. {filename}`\n"
                             if len(files_info) > 3:
                                 filenames_text += f"  `... 等 {len(files_info) - 3} 个文件`\n"
                                 if len(files_info) > 4:
                                     last_file = files_info[-1]
-                                    last_file_path = last_file.get('path', f'图片{len(files_info)}')
-                                    last_filename = os.path.basename(last_file_path) if last_file_path else f'图片{len(files_info)}'
+                                    last_file_path = last_file.get(
+                                        'path', f'图片{len(files_info)}')
+                                    last_filename = os.path.basename(
+                                        last_file_path) if last_file_path else f'图片{len(files_info)}'
                                     filenames_text += f"  `{len(files_info)}. {last_filename}`\n"
                     elif result.get('filename'):
                         # 如果没有files信息但有单个filename
@@ -17371,27 +18196,33 @@ class TelegramBot:
                     )
 
                     # 发送图片完成消息，替换进度消息
-                    logger.info(f"📤 [_process_download_async] 准备发送小红书图片完成消息，消息长度: {len(success_text)}")
-                    
+                    logger.info(
+                        f"📤 [_process_download_async] 准备发送小红书图片完成消息，消息长度: {len(success_text)}")
+
                     # 等待一段时间，确保xiaohongshu_downloader的进度消息被处理完毕
                     logger.info("⏳ 等待进度消息处理完成，然后发送汇总信息...")
                     await asyncio.sleep(2.0)  # 等待2秒
-                    
+
                     try:
                         await status_message.edit_text(success_text, parse_mode=None)
-                        logger.info("✅ [_process_download_async] 小红书图片下载完成消息发送成功")
+                        logger.info(
+                            "✅ [_process_download_async] 小红书图片下载完成消息发送成功")
                     except Exception as e:
                         if "Flood control" in str(e):
-                            logger.warning("⚠️ [_process_download_async] 图片下载完成消息遇到Flood control，等待5秒后重试...")
+                            logger.warning(
+                                "⚠️ [_process_download_async] 图片下载完成消息遇到Flood control，等待5秒后重试...")
                             await asyncio.sleep(5)
                             try:
                                 await status_message.edit_text(success_text, parse_mode=None)
-                                logger.info("✅ [_process_download_async] 重试发送图片下载完成消息成功")
+                                logger.info(
+                                    "✅ [_process_download_async] 重试发送图片下载完成消息成功")
                             except Exception as retry_error:
-                                logger.error(f"❌ [_process_download_async] 重试发送图片下载完成消息失败: {retry_error}")
+                                logger.error(
+                                    f"❌ [_process_download_async] 重试发送图片下载完成消息失败: {retry_error}")
                         else:
-                            logger.error(f"❌ [_process_download_async] 发送图片下载完成消息失败: {e}")
-                    
+                            logger.error(
+                                f"❌ [_process_download_async] 发送图片下载完成消息失败: {e}")
+
                     # 图片下载完成，进度消息已被完成消息替换，直接返回
                     logger.info("🔚 [_process_download_async] 小红书图片下载处理完成，直接返回")
                     return
@@ -17445,14 +18276,15 @@ class TelegramBot:
                         f"📺 分辨率: {resolution_with_quality}\n"
                         f"📂 保存位置: {result['download_path']}"
                     )
-                    
+
                     # 发送视频完成消息
                     try:
                         await status_message.edit_text(success_text, parse_mode=None)
                         logger.info("显示视频下载完成信息")
                     except Exception as e:
                         if "Flood control" in str(e):
-                            logger.warning("视频下载完成消息遇到Flood control，等待5秒后重试...")
+                            logger.warning(
+                                "视频下载完成消息遇到Flood control，等待5秒后重试...")
                             await asyncio.sleep(5)
                             try:
                                 await status_message.edit_text(success_text, parse_mode=None)
@@ -17462,25 +18294,27 @@ class TelegramBot:
                         else:
                             logger.error(f"发送视频下载完成消息失败: {e}")
                     return
-                
+
                 # 使用简单格式显示完成信息（只显示一次）
                 # 注意：小红书图片下载已在上面的分支中处理并返回，不会执行到这里
                 try:
                     # 获取进度信息用于显示
-                    display_filename = _clean_filename_for_display_local(result.get('filename', progress_data.get('filename', 'video.mp4') if progress_data and isinstance(progress_data, dict) else 'video.mp4'))
+                    display_filename = _clean_filename_for_display_local(result.get('filename', progress_data.get(
+                        'filename', 'video.mp4') if progress_data and isinstance(progress_data, dict) else 'video.mp4'))
                     resolution = result.get('resolution', '未知')
                     platform = result.get('platform', '未知')
                     size_mb = result.get('size_mb', 0)
-                    
+
                     # 添加调试日志
-                    logger.info(f"🔍 [_process_download_async] 进入通用处理逻辑 - content_type: {result.get('content_type')}, resolution: {resolution}, platform: {platform}")
+                    logger.info(
+                        f"🔍 [_process_download_async] 进入通用处理逻辑 - content_type: {result.get('content_type')}, resolution: {resolution}, platform: {platform}")
 
                     # 获取分辨率质量标识（避免重复添加）
                     quality_suffix = self._get_resolution_quality(resolution)
                     # 如果resolution已经包含质量标识，则不添加quality_suffix
                     if quality_suffix and quality_suffix.strip() in resolution:
                         quality_suffix = ""
-                    
+
                     # 构建最终的分辨率显示（避免重复）
                     final_resolution = resolution + quality_suffix
 
@@ -17493,19 +18327,21 @@ class TelegramBot:
                         if result.get('playlist_name'):
                             # 歌单下载 - 使用普通文本格式
                             title = "🎵 网易云音乐歌单下载完成"
-                            
+
                             playlist_name = result.get('playlist_name', '未知歌单')
                             creator = result.get('creator', '未知创建者')
                             total_songs = result.get('total_songs', 0)
-                            downloaded_songs = result.get('downloaded_songs', 0)
+                            downloaded_songs = result.get(
+                                'downloaded_songs', 0)
                             failed_songs = result.get('failed_songs', 0)
                             total_size = result.get('total_size_mb', 0)
                             download_path = result.get('download_path', '未知路径')
                             quality = result.get('quality', '未知')
-                            
+
                             # 获取音质详细信息
-                            quality_info = self._get_netease_quality_info(quality)
-                            
+                            quality_info = self._get_netease_quality_info(
+                                quality)
+
                             success_text = (
                                 f"{title}\n\n"
                                 f"📋 歌单名称: {playlist_name}\n"
@@ -17515,41 +18351,46 @@ class TelegramBot:
                                 f"💾 总大小: {total_size:.1f} MB\n"
                                 f"📂 保存位置: {download_path}"
                             )
-                            
+
                             # 如果有失败的歌曲，添加失败详情
                             failed_details = result.get('failed_details', [])
                             if failed_details:
                                 success_text += "\n\n❌ 下载失败的歌曲:"
-                                for i, failed in enumerate(failed_details[:5], 1):  # 只显示前5个失败的
-                                    song_name = failed.get('song', {}).get('name', '未知歌曲')
+                                # 只显示前5个失败的
+                                for i, failed in enumerate(failed_details[:5], 1):
+                                    song_name = failed.get(
+                                        'song', {}).get('name', '未知歌曲')
                                     error = failed.get('error', '未知错误')
                                     success_text += f"\n{i}. {song_name}: {error}"
                                 if len(failed_details) > 5:
                                     success_text += f"\n... 还有 {len(failed_details) - 5} 首歌曲下载失败"
-                            
+
                         elif result.get('album_name'):
                             # 专辑下载 - 使用新的格式
                             title = "🎵 网易云音乐专辑下载完成"
-                            
+
                             album_name = result.get('album_name', '未知专辑')
                             total_songs = result.get('total_songs', 0)
-                            downloaded_songs = result.get('downloaded_songs', 0)
+                            downloaded_songs = result.get(
+                                'downloaded_songs', 0)
                             total_size = result.get('total_size_mb', 0)
                             download_path = result.get('download_path', '未知路径')
                             quality = result.get('quality', '未知')
 
                             # 获取音质详细信息（文件格式和码率）
-                            quality_info = self._get_netease_quality_info(quality)
-                            
+                            quality_info = self._get_netease_quality_info(
+                                quality)
+
                             # 获取歌曲列表用于提取艺术家和文件格式
                             songs = result.get('songs', [])
                             logger.info(f"🔍 获取到的songs列表长度: {len(songs)}")
                             if songs:
                                 logger.info(f"🔍 第一首歌曲信息: {songs[0]}")
-                            
+
                             # 尝试从歌曲列表或下载路径提取艺术家信息
-                            artist_name = self._extract_artist_from_path(download_path, album_name, songs)
-                            
+                            artist_name = self._extract_artist_from_path(
+                                download_path, album_name, songs)
+
                             # 检测文件格式（从歌曲列表中提取）
                             file_formats = set()
                             for song in songs:
@@ -17564,15 +18405,15 @@ class TelegramBot:
                                     file_formats.add('WAV')
                                 elif song_name.endswith('.m4a'):
                                     file_formats.add('M4A')
-                            
+
                             # 如果没有检测到格式，使用默认格式
                             if not file_formats:
                                 # 不要强制使用音质设置推断的格式，而是使用实际检测到的格式
                                 # 如果确实没有检测到任何格式，才使用默认MP3
                                 file_formats.add('MP3')
-                            
+
                             format_display = '、'.join(sorted(file_formats))
-                            
+
                             success_text = (
                                 f"{title}\n\n"
                                 f"📀 专辑名称: {album_name}\n\n"
@@ -17592,31 +18433,37 @@ class TelegramBot:
                                     files = []
                                     for file in os.listdir(album_dir):
                                         if file.lower().endswith(('.mp3', '.flac', '.ape', '.wav', '.m4a')):
-                                            file_path = os.path.join(album_dir, file)
-                                            file_size = os.path.getsize(file_path)
-                                            files.append({'name': file, 'size': file_size})
-                                    
+                                            file_path = os.path.join(
+                                                album_dir, file)
+                                            file_size = os.path.getsize(
+                                                file_path)
+                                            files.append(
+                                                {'name': file, 'size': file_size})
+
                                     # 按文件名排序
                                     files.sort(key=lambda x: x['name'])
-                                    
+
                                     if files:
                                         success_text += "\n\n🎵 歌曲列表:\n\n"
                                         for i, file_info in enumerate(files, 1):
                                             filename = file_info['name']
-                                            file_size_mb = file_info['size'] / (1024 * 1024)
-                                            
+                                            file_size_mb = file_info['size'] / (
+                                                1024 * 1024)
+
                                             # 检查文件名是否已经包含序号
                                             import re
-                                            has_numbering = re.match(r'^\s*\d+\.\s*', filename)
-                                            
+                                            has_numbering = re.match(
+                                                r'^\s*\d+\.\s*', filename)
+
                                             if has_numbering:
                                                 # 文件名已有序号，直接显示
                                                 success_text += f"{filename} ({file_size_mb:.1f}MB)\n"
                                             else:
                                                 # 文件名没有序号，添加序号
                                                 success_text += f"{i:02d}. {filename} ({file_size_mb:.1f}MB)\n"
-                                            
-                                            logger.info(f"🔍 实际文件: {filename} - {file_size_mb:.1f}MB")
+
+                                            logger.info(
+                                                f"🔍 实际文件: {filename} - {file_size_mb:.1f}MB")
                                     else:
                                         success_text += "\n\n🎵 歌曲列表: 未找到音频文件\n"
                                 else:
@@ -17624,17 +18471,19 @@ class TelegramBot:
                                     if songs:
                                         success_text += "\n\n🎵 歌曲列表:\n\n"
                                         for i, song in enumerate(songs, 1):
-                                            song_name = song.get('song_name', '未知歌曲')
+                                            song_name = song.get(
+                                                'song_name', '未知歌曲')
                                             song_size = song.get('size_mb', 0)
-                                            
+
                                             # 确保文件名包含扩展名（仅用于显示）
                                             if not any(song_name.lower().endswith(ext) for ext in ['.mp3', '.flac', '.ape', '.wav', '.m4a']):
-                                                actual_format = song.get('file_format', '').lower()
+                                                actual_format = song.get(
+                                                    'file_format', '').lower()
                                                 if actual_format:
                                                     song_name += f'.{actual_format}'
                                                 else:
                                                     song_name += '.mp3'
-                                            
+
                                             success_text += f"{i}. {song_name} ({song_size:.1f}MB)\n"
                             except Exception as e:
                                 logger.error(f"❌ 获取文件列表失败: {e}")
@@ -17642,7 +18491,8 @@ class TelegramBot:
                                 if songs:
                                     success_text += "\n\n🎵 歌曲列表:\n\n"
                                     for i, song in enumerate(songs, 1):
-                                        song_name = song.get('song_name', '未知歌曲')
+                                        song_name = song.get(
+                                            'song_name', '未知歌曲')
                                         song_size = song.get('size_mb', 0)
                                         success_text += f"{i}. {song_name} ({song_size:.1f}MB)\n"
                         else:
@@ -17661,7 +18511,7 @@ class TelegramBot:
 
                             # 构建音乐名称
                             music_name = f"{song_title} - {song_artist}" if song_title and song_artist else filename
-                            
+
                             success_text = (
                                 f"{title}\n\n"
                                 f"🎵 音乐: {music_name}\n"
@@ -17671,7 +18521,7 @@ class TelegramBot:
                                 f"⏱️ 时长: {duration}\n"
                                 f"📂 保存位置: {download_path}"
                             )
-                        
+
                         # 发送网易云音乐下载完成消息
                         try:
                             await status_message.edit_text(success_text, parse_mode=None)
@@ -17686,54 +18536,62 @@ class TelegramBot:
                         if result.get('album_name'):
                             # 专辑下载 - 参考网易云音乐格式
                             title = "🎵 QQ音乐专辑下载完成"
-                            
+
                             album_name = result.get('album_name', '未知专辑')
                             singer_name = result.get('singer_name', '未知歌手')
                             total_songs = result.get('total_songs', 0)
-                            downloaded_songs = result.get('downloaded_songs', 0)
+                            downloaded_songs = result.get(
+                                'downloaded_songs', 0)
                             failed_songs = result.get('failed_songs', 0)
                             download_path = result.get('download_path', '未知路径')
-                            
+
                             # 获取音质信息（从下载的歌曲列表中提取）
                             downloaded_list = result.get('downloaded_list', [])
                             quality_info = {'name': '未知', 'bitrate': '未知'}
                             file_formats = set()
-                            
+
                             if downloaded_list:
                                 # 从第一首歌曲获取音质信息
                                 first_song = downloaded_list[0]
                                 quality = first_song.get('quality', '未知音质')
                                 format_type = first_song.get('format', '未知格式')
-                                
+
                                 # 设置音质信息
                                 if 'flac' in quality.lower() or '无损' in quality:
-                                    quality_info = {'name': 'FLAC无损', 'bitrate': '16bit/44khz/1058kbps'}
+                                    quality_info = {
+                                        'name': 'FLAC无损', 'bitrate': '16bit/44khz/1058kbps'}
                                     file_formats.add('FLAC')
                                 elif 'ape' in quality.lower():
-                                    quality_info = {'name': 'APE无损', 'bitrate': '16bit/44khz/1058kbps'}
+                                    quality_info = {
+                                        'name': 'APE无损', 'bitrate': '16bit/44khz/1058kbps'}
                                     file_formats.add('APE')
                                 elif '320' in quality:
-                                    quality_info = {'name': 'MP3高品质', 'bitrate': '320kbps'}
+                                    quality_info = {
+                                        'name': 'MP3高品质', 'bitrate': '320kbps'}
                                     file_formats.add('MP3')
                                 elif '128' in quality:
-                                    quality_info = {'name': 'MP3标准', 'bitrate': '128kbps'}
+                                    quality_info = {
+                                        'name': 'MP3标准', 'bitrate': '128kbps'}
                                     file_formats.add('MP3')
                                 else:
-                                    quality_info = {'name': quality, 'bitrate': '未知'}
+                                    quality_info = {
+                                        'name': quality, 'bitrate': '未知'}
                                     file_formats.add(format_type.upper())
-                            
+
                             # 计算总大小
                             total_size_mb = 0
                             try:
                                 import os
                                 if os.path.exists(download_path):
                                     for file in os.listdir(download_path):
-                                        file_path = os.path.join(download_path, file)
+                                        file_path = os.path.join(
+                                            download_path, file)
                                         if os.path.isfile(file_path):
-                                            total_size_mb += os.path.getsize(file_path) / (1024 * 1024)
+                                            total_size_mb += os.path.getsize(
+                                                file_path) / (1024 * 1024)
                             except Exception as e:
                                 logger.warning(f"计算总大小失败: {e}")
-                            
+
                             success_text = (
                                 f"{title}\n\n"
                                 f"📀 专辑名称: {album_name}\n\n"
@@ -17744,7 +18602,7 @@ class TelegramBot:
                                 f"📊 码率: {quality_info['bitrate']}\n"
                                 f"📂 保存位置: {download_path}"
                             )
-                            
+
                             # 显示歌曲列表（从实际文件获取）
                             try:
                                 import os
@@ -17753,23 +18611,28 @@ class TelegramBot:
                                     files = []
                                     for file in os.listdir(album_dir):
                                         if file.lower().endswith(('.mp3', '.flac', '.ape', '.wav', '.m4a')):
-                                            file_path = os.path.join(album_dir, file)
-                                            file_size = os.path.getsize(file_path)
-                                            files.append({'name': file, 'size': file_size})
-                                    
+                                            file_path = os.path.join(
+                                                album_dir, file)
+                                            file_size = os.path.getsize(
+                                                file_path)
+                                            files.append(
+                                                {'name': file, 'size': file_size})
+
                                     # 按文件名排序
                                     files.sort(key=lambda x: x['name'])
-                                    
+
                                     if files:
                                         success_text += "\n\n🎵 歌曲列表:\n\n"
                                         for i, file_info in enumerate(files, 1):
                                             filename = file_info['name']
-                                            file_size_mb = file_info['size'] / (1024 * 1024)
-                                            
+                                            file_size_mb = file_info['size'] / (
+                                                1024 * 1024)
+
                                             # 检查文件名是否已经包含序号
                                             import re
-                                            has_numbering = re.match(r'^\s*\d+\.\s*', filename)
-                                            
+                                            has_numbering = re.match(
+                                                r'^\s*\d+\.\s*', filename)
+
                                             if has_numbering:
                                                 # 文件名已有序号，直接显示
                                                 success_text += f"{filename} ({file_size_mb:.1f}MB)\n"
@@ -17783,22 +18646,24 @@ class TelegramBot:
                             except Exception as e:
                                 logger.warning(f"获取歌曲列表失败: {e}")
                                 success_text += "\n\n🎵 歌曲列表: 获取失败\n"
-                            
+
                         elif result.get('playlist_name'):
                             # 歌单下载 - 参考网易云音乐格式
                             title = "🎵 QQ音乐歌单下载完成"
-                            
+
                             playlist_name = result.get('playlist_name', '未知歌单')
                             total_songs = result.get('total_songs', 0)
-                            downloaded_songs = result.get('downloaded_songs', 0)
+                            downloaded_songs = result.get(
+                                'downloaded_songs', 0)
                             failed_songs = result.get('failed_songs', 0)
                             total_size = result.get('total_size_mb', 0)
                             download_path = result.get('download_path', '未知路径')
                             quality = result.get('quality', '未知')
-                            
+
                             # 获取音质详细信息
-                            quality_info = self._get_qqmusic_quality_info(quality)
-                            
+                            quality_info = self._get_qqmusic_quality_info(
+                                quality)
+
                             success_text = (
                                 f"{title}\n\n"
                                 f"📋 歌单名称: {playlist_name}\n"
@@ -17808,31 +18673,32 @@ class TelegramBot:
                                 f"💾 总大小: {total_size:.1f} MB\n"
                                 f"📂 保存位置: {download_path}"
                             )
-                            
+
                             # 如果有失败的歌曲，添加失败详情
                             failed_list = result.get('failed_list', [])
                             if failed_list:
                                 success_text += "\n\n❌ 下载失败的歌曲:"
                                 for failed in failed_list[:5]:  # 只显示前5个失败的
                                     song_name = failed.get('song_name', '未知歌曲')
-                                    singer_name = failed.get('singer_name', '未知歌手')
+                                    singer_name = failed.get(
+                                        'singer_name', '未知歌手')
                                     error = failed.get('error', '未知错误')
                                     success_text += f"\n• {singer_name} - {song_name}: {error}"
-                                
+
                                 if len(failed_list) > 5:
                                     success_text += f"\n• ... 还有 {len(failed_list) - 5} 首歌曲下载失败"
-                        
+
                         else:
                             # 单首歌曲下载
                             title = "🎵 QQ音乐下载完成"
-                            
+
                             song_title = result.get('song_title', '未知歌曲')
                             song_artist = result.get('song_artist', '未知歌手')
                             album = result.get('album', '未知专辑')
                             quality = result.get('quality', '未知音质')
                             format_type = result.get('format', '未知格式')
                             file_path = result.get('file_path', '未知路径')
-                            
+
                             # 计算文件大小（MB）
                             size_text = "未知"
                             try:
@@ -17842,23 +18708,26 @@ class TelegramBot:
                                     size_text = f"{_size_bytes / (1024 * 1024):.2f} MB"
                             except Exception:
                                 pass
-                            
+
                             # 计算时长（优先使用结果中的时长；否则尝试用 mutagen 读取）
                             duration_seconds = result.get('duration') or 0
                             if not duration_seconds or duration_seconds <= 0:
                                 try:
                                     from mutagen import File as _MutagenFile
-                                    _audio = _MutagenFile(file_path) if file_path else None
+                                    _audio = _MutagenFile(
+                                        file_path) if file_path else None
                                     if _audio and getattr(_audio, 'info', None) and getattr(_audio.info, 'length', None):
-                                        duration_seconds = int(_audio.info.length)
+                                        duration_seconds = int(
+                                            _audio.info.length)
                                 except Exception:
                                     pass
                             if duration_seconds and duration_seconds > 0:
-                                _mins, _secs = divmod(int(duration_seconds), 60)
+                                _mins, _secs = divmod(
+                                    int(duration_seconds), 60)
                                 duration_text = f"{_mins:02d}:{_secs:02d}"
                             else:
                                 duration_text = "未知"
-                            
+
                             success_text = (
                                 f"{title}\n\n"
                                 f"🎵 歌曲: {song_title}\n"
@@ -17870,7 +18739,7 @@ class TelegramBot:
                                 f"⏱️ 时长: {duration_text}\n"
                                 f"📂 保存位置: {file_path}"
                             )
-                        
+
                         try:
                             await status_message.edit_text(success_text, parse_mode=None)
                             logger.info("📱 发送QQ音乐下载完成消息")
@@ -17883,189 +18752,225 @@ class TelegramBot:
                         # Apple Music 下载完成
                         # 添加调试日志
                         logger.info(f"🔍 Apple Music下载结果: {result}")
-                        logger.info(f"🔍 music_type: {result.get('music_type')}")
+                        logger.info(
+                            f"🔍 music_type: {result.get('music_type')}")
                         logger.info(f"🔍 platform: {platform}")
-                        logger.info(f"🔍 result platform: {result.get('platform')}")
-                        
+                        logger.info(
+                            f"🔍 result platform: {result.get('platform')}")
+
                         # 🔧 紧急调试：检查result中的total_size_mb
                         logger.info(f"🚨 紧急调试：检查result中的total_size_mb")
-                        logger.info(f"  - result包含total_size_mb: {'total_size_mb' in result}")
-                        logger.info(f"  - result.get('total_size_mb'): {result.get('total_size_mb')}")
-                        logger.info(f"  - result.get('total_size'): {result.get('total_size')}")
+                        logger.info(
+                            f"  - result包含total_size_mb: {'total_size_mb' in result}")
+                        logger.info(
+                            f"  - result.get('total_size_mb'): {result.get('total_size_mb')}")
+                        logger.info(
+                            f"  - result.get('total_size'): {result.get('total_size')}")
                         logger.info(f"  - result的所有字段: {list(result.keys())}")
-                        
+
                         # 修复：直接以URL检测为准，URL检测最准确
                         url = result.get('url', '')
                         is_album = 'album' in url
                         is_song = 'song' in url
-                        
-                        logger.info(f"🔍 URL检测结果: album={is_album}, song={is_song}")
+
+                        logger.info(
+                            f"🔍 URL检测结果: album={is_album}, song={is_song}")
                         logger.info(f"🔍 原始URL: {url}")
-                        
+
                         if is_album:
                             # 专辑下载
                             title = "🎵 Apple Music专辑下载完成"
                             escaped_title = (title)
 
                             # 修复：重新统计专辑目录中的文件
-                            download_path = result.get('download_path', '/downloads/AppleMusic')
-                            amd_downloads_dir = os.path.join(download_path, "AM-DL downloads")
-                            
+                            download_path = result.get(
+                                'download_path', '/downloads/AppleMusic')
+                            amd_downloads_dir = os.path.join(
+                                download_path, "AM-DL downloads")
+
                             # 获取专辑信息 - 从curl脚本获取
                             music_info = result.get('music_info', {})
                             album_name = music_info.get('album', '未知专辑')
                             artist = music_info.get('artist', '未知艺术家')
-                            
-                            logger.info(f"🔍 curl脚本获取的音乐信息: 艺术家='{artist}', 专辑='{album_name}'")
-                            
+
+                            logger.info(
+                                f"🔍 curl脚本获取的音乐信息: 艺术家='{artist}', 专辑='{album_name}'")
+
                             # 如果curl脚本无法获取专辑信息，记录警告
                             if album_name == '未知专辑' or artist == '未知艺术家':
                                 logger.warning("⚠️ curl脚本无法获取专辑信息，这不应该发生")
                                 logger.warning("⚠️ 请检查curl脚本的HTML解析是否正确")
-                            
+
                             # 只遍历专辑目录，而不是整个下载目录
                             files_info = []
                             total_size = 0
-                            
+
                             if os.path.exists(amd_downloads_dir):
                                 # 查找艺术家目录
                                 artist_dir = None
                                 all_items = os.listdir(amd_downloads_dir)
                                 for item in all_items:
-                                    item_path = os.path.join(amd_downloads_dir, item)
+                                    item_path = os.path.join(
+                                        amd_downloads_dir, item)
                                     if os.path.isdir(item_path) and item == artist:
                                         artist_dir = item_path
                                         break
-                                
+
                                 if artist_dir:
                                     # 查找专辑目录 - 改为包含匹配，更灵活
                                     album_dir = None
                                     artist_items = os.listdir(artist_dir)
                                     for item in artist_items:
-                                        item_path = os.path.join(artist_dir, item)
+                                        item_path = os.path.join(
+                                            artist_dir, item)
                                         if os.path.isdir(item_path) and album_name in item:
                                             album_dir = item_path
-                                            logger.info(f"✅ 找到专辑目录（包含匹配）: '{item}' 包含 '{album_name}'")
+                                            logger.info(
+                                                f"✅ 找到专辑目录（包含匹配）: '{item}' 包含 '{album_name}'")
                                             break
-                                    
+
                                     if album_dir:
                                         # 只遍历专辑目录中的文件
                                         album_files = os.listdir(album_dir)
-                                        logger.info(f"🔍 遍历专辑目录: {album_dir}，找到 {len(album_files)} 个文件")
-                                        
+                                        logger.info(
+                                            f"🔍 遍历专辑目录: {album_dir}，找到 {len(album_files)} 个文件")
+
                                         for file in album_files:
                                             if file.lower().endswith(('.m4a', '.flac', '.aac', '.mp3')):
-                                                file_path = os.path.join(album_dir, file)
-                                                file_size = os.path.getsize(file_path)
+                                                file_path = os.path.join(
+                                                    album_dir, file)
+                                                file_size = os.path.getsize(
+                                                    file_path)
                                                 total_size += file_size
-                                                
+
                                                 files_info.append({
                                                     'name': file,
                                                     'path': file,
                                                     'size': file_size
                                                 })
-                                        
-                                        logger.info(f"✅ 专辑目录中找到 {len(files_info)} 个音频文件")
+
+                                        logger.info(
+                                            f"✅ 专辑目录中找到 {len(files_info)} 个音频文件")
                                     else:
-                                        logger.warning(f"⚠️ 未找到包含专辑名称的目录: '{album_name}'")
-                                        logger.info(f"🔍 艺术家目录 '{artist}' 中的子目录: {artist_items}")
+                                        logger.warning(
+                                            f"⚠️ 未找到包含专辑名称的目录: '{album_name}'")
+                                        logger.info(
+                                            f"🔍 艺术家目录 '{artist}' 中的子目录: {artist_items}")
                                         # 尝试模糊匹配
                                         for item in artist_items:
-                                            item_path = os.path.join(artist_dir, item)
+                                            item_path = os.path.join(
+                                                artist_dir, item)
                                             if os.path.isdir(item_path):
-                                                logger.info(f"🔍 检查目录: '{item}' vs '{album_name}'")
+                                                logger.info(
+                                                    f"🔍 检查目录: '{item}' vs '{album_name}'")
                                                 # 如果专辑名称在目录名中，或者目录名在专辑名称中
                                                 if album_name in item or item in album_name:
                                                     album_dir = item_path
-                                                    logger.info(f"✅ 模糊匹配成功: '{item}' 与 '{album_name}' 相关")
+                                                    logger.info(
+                                                        f"✅ 模糊匹配成功: '{item}' 与 '{album_name}' 相关")
                                                     break
-                                        
+
                                         if album_dir:
                                             # 模糊匹配成功，继续处理
                                             album_files = os.listdir(album_dir)
-                                            logger.info(f"🔍 遍历模糊匹配的专辑目录: {album_dir}")
-                                            
+                                            logger.info(
+                                                f"🔍 遍历模糊匹配的专辑目录: {album_dir}")
+
                                             for file in album_files:
                                                 if file.lower().endswith(('.m4a', '.flac', '.aac', '.mp3')):
-                                                    file_path = os.path.join(album_dir, file)
-                                                    file_size = os.path.getsize(file_path)
+                                                    file_path = os.path.join(
+                                                        album_dir, file)
+                                                    file_size = os.path.getsize(
+                                                        file_path)
                                                     total_size += file_size
-                                                    
+
                                                     files_info.append({
                                                         'name': file,
                                                         'path': file,
                                                         'size': file_size
                                                     })
-                                            
-                                            logger.info(f"✅ 模糊匹配目录中找到 {len(files_info)} 个音频文件")
+
+                                            logger.info(
+                                                f"✅ 模糊匹配目录中找到 {len(files_info)} 个音频文件")
                                         else:
-                                            logger.error(f"❌ 无法找到专辑目录，请检查curl脚本的HTML解析是否正确")
+                                            logger.error(
+                                                f"❌ 无法找到专辑目录，请检查curl脚本的HTML解析是否正确")
                                             return {
                                                 'success': False,
                                                 'error': f'无法找到专辑目录: {album_name}'
                                             }
                                 else:
                                     logger.warning(f"⚠️ 未找到艺术家目录: '{artist}'")
-                                    logger.error(f"❌ 无法找到艺术家目录，请检查curl脚本的HTML解析是否正确")
+                                    logger.error(
+                                        f"❌ 无法找到艺术家目录，请检查curl脚本的HTML解析是否正确")
                                     return {
                                         'success': False,
                                         'error': f'无法找到艺术家目录: {artist}'
                                     }
-                            
+
                             # 计算总大小（MB）
                             # 修复：优先使用result中的total_size_mb，避免重复统计
                             if 'result' in locals() and result and result.get('total_size_mb'):
                                 total_size_mb = result.get('total_size_mb')
-                                logger.info(f"🔧 专辑下载：使用result中的total_size_mb: {total_size_mb:.2f} MB")
+                                logger.info(
+                                    f"🔧 专辑下载：使用result中的total_size_mb: {total_size_mb:.2f} MB")
                             elif total_size > 0:
                                 if total_size > 1000:  # 如果大于1000，可能是bytes，需要转换
                                     total_size_mb = total_size / (1024 * 1024)
-                                    logger.info(f"🔧 专辑下载：检测到total_size为bytes，转换为MB: {total_size} bytes -> {total_size_mb:.2f} MB")
+                                    logger.info(
+                                        f"🔧 专辑下载：检测到total_size为bytes，转换为MB: {total_size} bytes -> {total_size_mb:.2f} MB")
                                 else:  # 如果小于1000，已经是MB单位
                                     total_size_mb = total_size
-                                    logger.info(f"🔧 专辑下载：total_size已经是MB单位: {total_size_mb:.2f} MB")
+                                    logger.info(
+                                        f"🔧 专辑下载：total_size已经是MB单位: {total_size_mb:.2f} MB")
                             else:
                                 total_size_mb = 0
                             files_count = len(files_info)
-                            
+
                             # 计算曲目数量（排除封面和歌词文件）
                             track_count = files_count
-                            
+
                             # 编码判断 - 使用ffprobe准确检测音频编码格式
                             def detect_audio_codec(file_path):
                                 """使用ffprobe检测音频文件的编码格式"""
                                 try:
                                     import subprocess
                                     import json
-                                    
+
                                     # 使用ffprobe获取音频信息
                                     cmd = [
                                         'ffprobe', '-loglevel', 'quiet', '-print_format', 'json',
                                         '-show_streams', '-select_streams', 'a:0', file_path
                                     ]
-                                    
-                                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
+                                    result = subprocess.run(
+                                        cmd, capture_output=True, text=True, timeout=10)
                                     if result.returncode == 0:
                                         data = json.loads(result.stdout)
                                         if 'streams' in data and len(data['streams']) > 0:
                                             stream = data['streams'][0]
-                                            
+
                                             # 获取编码格式
-                                            codec_name = stream.get('codec_name', '').upper()
-                                            codec_long_name = stream.get('codec_long_name', '')
-                                            
+                                            codec_name = stream.get(
+                                                'codec_name', '').upper()
+                                            codec_long_name = stream.get(
+                                                'codec_long_name', '')
+
                                             # 获取实际码率
                                             bit_rate = stream.get('bit_rate')
                                             if bit_rate:
-                                                bit_rate_kbps = int(int(bit_rate) / 1000)
+                                                bit_rate_kbps = int(
+                                                    int(bit_rate) / 1000)
                                             else:
                                                 bit_rate_kbps = None
-                                            
+
                                             # 获取采样率
-                                            sample_rate = stream.get('sample_rate')
-                                            
-                                            logger.info(f"🔍 ffprobe检测结果: {codec_name} - {codec_long_name} - {bit_rate_kbps}kbps - {sample_rate}Hz")
-                                            
+                                            sample_rate = stream.get(
+                                                'sample_rate')
+
+                                            logger.info(
+                                                f"🔍 ffprobe检测结果: {codec_name} - {codec_long_name} - {bit_rate_kbps}kbps - {sample_rate}Hz")
+
                                             return {
                                                 'codec': codec_name,
                                                 'long_name': codec_long_name,
@@ -18074,23 +18979,28 @@ class TelegramBot:
                                             }
                                 except Exception as e:
                                     logger.warning(f"⚠️ ffprobe检测失败: {e}")
-                                
+
                                 return None
-                            
+
                             # 检测音频文件编码
-                            m4a_files = [f for f in files_info if f['name'].lower().endswith('.m4a')]
-                            aac_files = [f for f in files_info if f['name'].lower().endswith('.aac')]
-                            flac_files = [f for f in files_info if f['name'].lower().endswith('.flac')]
-                            mp3_files = [f for f in files_info if f['name'].lower().endswith('.mp3')]
-                            
+                            m4a_files = [
+                                f for f in files_info if f['name'].lower().endswith('.m4a')]
+                            aac_files = [
+                                f for f in files_info if f['name'].lower().endswith('.aac')]
+                            flac_files = [
+                                f for f in files_info if f['name'].lower().endswith('.flac')]
+                            mp3_files = [
+                                f for f in files_info if f['name'].lower().endswith('.mp3')]
+
                             # 优先检测M4A文件（Apple Music主要格式，可能是AAC或ALAC）
                             detected_codec = None
                             if m4a_files:
                                 # 检测第一个M4A文件的编码
                                 first_m4a = m4a_files[0]
-                                m4a_path = os.path.join(album_dir, first_m4a['name'])
+                                m4a_path = os.path.join(
+                                    album_dir, first_m4a['name'])
                                 detected_codec = detect_audio_codec(m4a_path)
-                                
+
                                 if detected_codec:
                                     if detected_codec['codec'] in ['ALAC', 'AAC']:
                                         audio_quality = detected_codec['codec']
@@ -18115,7 +19025,7 @@ class TelegramBot:
                                 audio_quality = "FLAC"
                             else:
                                 audio_quality = "未知"
-                            
+
                             # 码率信息 - 使用ffprobe检测的实际码率，或使用默认值（不重复显示编码格式）
                             if detected_codec and detected_codec['bitrate_kbps']:
                                 # 使用ffprobe检测的实际码率
@@ -18132,7 +19042,7 @@ class TelegramBot:
                                     bitrate = "320kbps"  # 标准MP3码率
                                 else:
                                     bitrate = "未知"
-                            
+
                             # 文件格式显示
                             formats = set()
                             for f in files_info:
@@ -18144,14 +19054,17 @@ class TelegramBot:
                                     formats.add('AAC')
                                 elif f['name'].lower().endswith('.mp3'):
                                     formats.add('MP3')
-                            format_display = ", ".join(formats) if formats else "未知"
+                            format_display = ", ".join(
+                                formats) if formats else "未知"
 
                             # 确保total_size_mb有值，并添加调试信息
-                            logger.info(f"🔍 专辑下载统计: total_size={total_size}, files_count={len(files_info)}")
+                            logger.info(
+                                f"🔍 专辑下载统计: total_size={total_size}, files_count={len(files_info)}")
 
                             size_str = f"{total_size_mb:.2f}"
-                            logger.info(f"🔍 构建size_str: {total_size_mb:.2f} -> {size_str}")
-                            
+                            logger.info(
+                                f"🔍 构建size_str: {total_size_mb:.2f} -> {size_str}")
+
                             # 构建歌曲列表 - 从专辑目录中获取实际文件信息
                             song_list = ""
                             if files_info:
@@ -18160,12 +19073,15 @@ class TelegramBot:
                                     if file_info['name'].lower().endswith(('.m4a', '.flac', '.aac', '.mp3')):
                                         # 保持原始文件名，包含正确的扩展名
                                         filename = file_info['name']
-                                        size_mb = file_info['size'] / (1024 * 1024)
-                                        size_mb_str = f"{size_mb:.1f}".replace('.', r'\.')
+                                        size_mb = file_info['size'] / \
+                                            (1024 * 1024)
+                                        size_mb_str = f"{size_mb:.1f}".replace(
+                                            '.', r'\.')
                                         song_list += f"{i:02d}. {filename} ({size_mb_str}MB)\n"
-                                        
-                                        logger.info(f"🔍 歌曲 {i}: {filename} - {size_mb:.1f}MB -> {size_mb_str}MB")
-                            
+
+                                        logger.info(
+                                            f"🔍 歌曲 {i}: {filename} - {size_mb:.1f}MB -> {size_mb_str}MB")
+
                             # 使用普通文本格式，不需要转义
                             escaped_album_name = album_name
                             escaped_artist = artist
@@ -18175,7 +19091,7 @@ class TelegramBot:
                             escaped_format_display = format_display
                             escaped_bitrate = bitrate
                             escaped_download_path = download_path
-                            
+
                             # 修改为普通文本格式，与网易云音乐保持一致
                             success_text = (
                                 f"🎵 **Apple Music专辑下载完成**\n\n"
@@ -18190,7 +19106,7 @@ class TelegramBot:
                                 f"🎛️ 采样率: 44.1 kHz\n"
                                 f"📂 保存位置: {download_path}"
                             )
-                            
+
                             # 构建歌曲列表（普通文本格式）
                             if files_info:
                                 success_text += "\n\n🎵 歌曲列表:\n\n"
@@ -18198,41 +19114,48 @@ class TelegramBot:
                                     if file_info['name'].lower().endswith(('.m4a', '.flac', '.aac', '.mp3')):
                                         # 保持原始文件名，包含正确的扩展名
                                         filename = file_info['name']
-                                        size_mb = file_info['size'] / (1024 * 1024)
+                                        size_mb = file_info['size'] / \
+                                            (1024 * 1024)
                                         success_text += f"{i}. {filename} ({size_mb:.1f}MB)\n"
 
                         elif is_song:
                             # 单曲下载 - 修复：重新统计文件并修复消息格式
                             logger.info(f"🔍 进入Apple Music单曲下载分支")
                             title = "🎵 Apple Music 单曲下载完成"
-                            
+
                             # 修复：重新统计下载目录中的文件
-                            download_path = result.get('download_path', '/downloads/AppleMusic')
-                            amd_downloads_dir = os.path.join(download_path, "AM-DL downloads")
-                            
+                            download_path = result.get(
+                                'download_path', '/downloads/AppleMusic')
+                            amd_downloads_dir = os.path.join(
+                                download_path, "AM-DL downloads")
+
                             files_info = []
                             total_size = 0
-                            
+
                             # 修复：优先从music_info中获取专辑和艺术家信息，用于构建正确的目录路径
                             music_info = result.get('music_info', {})
                             artist_name = music_info.get('artist', '未知艺术家')
                             album_name = music_info.get('album', '未知专辑')
-                            
+
                             # 构建专辑目录路径 - 改为包含匹配，更灵活
-                            album_dir = os.path.join(amd_downloads_dir, artist_name, album_name)
-                            
+                            album_dir = os.path.join(
+                                amd_downloads_dir, artist_name, album_name)
+
                             if os.path.exists(album_dir):
                                 # 只遍历专辑目录，而不是整个AM-DL downloads目录
                                 logger.info(f"🔍 遍历专辑目录: {album_dir}")
                                 for root, dirs, files in os.walk(album_dir):
                                     for file in files:
                                         if file.lower().endswith(('.m4a', '.flac', '.aac', '.mp3')):
-                                            file_path = os.path.join(root, file)
-                                            file_size = os.path.getsize(file_path)
+                                            file_path = os.path.join(
+                                                root, file)
+                                            file_size = os.path.getsize(
+                                                file_path)
                                             total_size += file_size
-                                            
+
                                             # 从文件路径提取音乐信息
-                                            relative_path = os.path.relpath(file_path, album_dir)
+                                            relative_path = os.path.relpath(
+                                                file_path, album_dir)
                                             files_info.append({
                                                 'name': file,
                                                 'path': relative_path,
@@ -18240,42 +19163,52 @@ class TelegramBot:
                                             })
                             else:
                                 # 如果专辑目录不存在，尝试包含匹配
-                                logger.warning(f"⚠️ 专辑目录不存在: {album_dir}，尝试包含匹配")
-                                
+                                logger.warning(
+                                    f"⚠️ 专辑目录不存在: {album_dir}，尝试包含匹配")
+
                                 # 先尝试在艺术家目录中查找包含专辑名称的目录
-                                artist_dir = os.path.join(amd_downloads_dir, artist_name)
+                                artist_dir = os.path.join(
+                                    amd_downloads_dir, artist_name)
                                 if os.path.exists(artist_dir):
                                     artist_items = os.listdir(artist_dir)
-                                    logger.info(f"🔍 艺术家目录 '{artist_name}' 中的子目录: {artist_items}")
-                                    
+                                    logger.info(
+                                        f"🔍 艺术家目录 '{artist_name}' 中的子目录: {artist_items}")
+
                                     # 查找包含专辑名称的目录
                                     for item in artist_items:
-                                        item_path = os.path.join(artist_dir, item)
+                                        item_path = os.path.join(
+                                            artist_dir, item)
                                         if os.path.isdir(item_path) and album_name in item:
                                             album_dir = item_path
-                                            logger.info(f"✅ 找到包含匹配的专辑目录: '{item}' 包含 '{album_name}'")
+                                            logger.info(
+                                                f"✅ 找到包含匹配的专辑目录: '{item}' 包含 '{album_name}'")
                                             break
-                                    
+
                                     if album_dir:
                                         # 遍历包含匹配的专辑目录
-                                        logger.info(f"🔍 遍历包含匹配的专辑目录: {album_dir}")
+                                        logger.info(
+                                            f"🔍 遍历包含匹配的专辑目录: {album_dir}")
                                         for root, dirs, files in os.walk(album_dir):
                                             for file in files:
                                                 if file.lower().endswith(('.m4a', '.flac', '.aac', '.mp3')):
-                                                    file_path = os.path.join(root, file)
-                                                    file_size = os.path.getsize(file_path)
+                                                    file_path = os.path.join(
+                                                        root, file)
+                                                    file_size = os.path.getsize(
+                                                        file_path)
                                                     total_size += file_size
-                                                    
+
                                                     # 从文件路径提取音乐信息
-                                                    relative_path = os.path.relpath(file_path, album_dir)
+                                                    relative_path = os.path.relpath(
+                                                        file_path, album_dir)
                                                     files_info.append({
                                                         'name': file,
                                                         'path': relative_path,
                                                         'size': file_size
                                                     })
-                                        
-                                        logger.info(f"✅ 包含匹配目录中找到 {len(files_info)} 个音频文件")
-                                
+
+                                        logger.info(
+                                            f"✅ 包含匹配目录中找到 {len(files_info)} 个音频文件")
+
                                 # 如果仍然没有找到，回退到整个AM-DL downloads目录
                                 if not files_info:
                                     logger.warning(f"⚠️ 包含匹配也失败，回退到整个目录遍历")
@@ -18283,30 +19216,36 @@ class TelegramBot:
                                         for root, dirs, files in os.walk(amd_downloads_dir):
                                             for file in files:
                                                 if file.lower().endswith(('.m4a', '.flac', '.aac', '.mp3')):
-                                                    file_path = os.path.join(root, file)
-                                                    file_size = os.path.getsize(file_path)
+                                                    file_path = os.path.join(
+                                                        root, file)
+                                                    file_size = os.path.getsize(
+                                                        file_path)
                                                     total_size += file_size
-                                                    
+
                                                     # 从文件路径提取音乐信息
-                                                    relative_path = os.path.relpath(file_path, amd_downloads_dir)
+                                                    relative_path = os.path.relpath(
+                                                        file_path, amd_downloads_dir)
                                                     files_info.append({
                                                         'name': file,
                                                         'path': relative_path,
                                                         'size': file_size
                                                     })
-                            
+
                             # 计算总大小（MB）
                             # 修复：优先使用result中的total_size_mb，避免重复统计
                             if 'result' in locals() and result and result.get('total_size_mb'):
                                 total_size_mb = result.get('total_size_mb')
-                                logger.info(f"🔧 单曲下载：使用result中的total_size_mb: {total_size_mb:.2f} MB")
+                                logger.info(
+                                    f"🔧 单曲下载：使用result中的total_size_mb: {total_size_mb:.2f} MB")
                             elif total_size > 0:
                                 total_size_mb = total_size / (1024 * 1024)
-                                logger.info(f"🔧 单曲下载：重新统计total_size={total_size} bytes -> {total_size_mb:.2f} MB")
+                                logger.info(
+                                    f"🔧 单曲下载：重新统计total_size={total_size} bytes -> {total_size_mb:.2f} MB")
                             else:
                                 total_size_mb = 0
-                                logger.warning(f"⚠️ 单曲下载：total_size为0，可能没有找到音频文件")
-                            
+                                logger.warning(
+                                    f"⚠️ 单曲下载：total_size为0，可能没有找到音频文件")
+
                             # 修复：获取音频时长
                             def get_audio_duration(file_path):
                                 """使用ffprobe获取音频文件时长"""
@@ -18316,9 +19255,10 @@ class TelegramBot:
                                         'ffprobe', '-loglevel', 'quiet', '-show_entries', 'format=duration',
                                         '-of', 'csv=p=0', file_path
                                     ], capture_output=True, text=True, timeout=10)
-                                    
+
                                     if result.returncode == 0 and result.stdout.strip():
-                                        duration_seconds = float(result.stdout.strip())
+                                        duration_seconds = float(
+                                            result.stdout.strip())
                                         minutes = int(duration_seconds // 60)
                                         seconds = int(duration_seconds % 60)
                                         return f"{minutes}:{seconds:02d}"
@@ -18327,55 +19267,65 @@ class TelegramBot:
                                 except Exception as e:
                                     logger.warning(f"⚠️ 获取音频时长失败: {e}")
                                     return "未知"
-                            
+
                             # 获取第一个音频文件的时长
                             duration = "未知"
                             if files_info:
                                 # 修复：构建正确的文件路径
                                 first_file = files_info[0]
-                                
+
                                 # 尝试多种路径构建方式
                                 possible_paths = []
-                                
+
                                 # 方式1：使用当前album_dir（如果存在）
                                 if 'album_dir' in locals() and album_dir and os.path.exists(album_dir):
-                                    possible_paths.append(os.path.join(album_dir, first_file['name']))
-                                
+                                    possible_paths.append(os.path.join(
+                                        album_dir, first_file['name']))
+
                                 # 方式2：使用标准路径
-                                standard_album_dir = os.path.join(amd_downloads_dir, artist_name, album_name)
+                                standard_album_dir = os.path.join(
+                                    amd_downloads_dir, artist_name, album_name)
                                 if os.path.exists(standard_album_dir):
-                                    possible_paths.append(os.path.join(standard_album_dir, first_file['name']))
-                                
+                                    possible_paths.append(os.path.join(
+                                        standard_album_dir, first_file['name']))
+
                                 # 方式3：根据files_info中的path信息构建
                                 if first_file.get('path'):
                                     if os.path.isabs(first_file['path']):
                                         # 如果path是绝对路径
-                                        possible_paths.append(first_file['path'])
+                                        possible_paths.append(
+                                            first_file['path'])
                                     else:
                                         # 如果path是相对路径
-                                        possible_paths.append(os.path.join(amd_downloads_dir, first_file['path']))
-                                
+                                        possible_paths.append(os.path.join(
+                                            amd_downloads_dir, first_file['path']))
+
                                 # 方式4：直接在amd_downloads_dir中查找
                                 for root, dirs, files in os.walk(amd_downloads_dir):
                                     if first_file['name'] in files:
-                                        possible_paths.append(os.path.join(root, first_file['name']))
+                                        possible_paths.append(
+                                            os.path.join(root, first_file['name']))
                                         break
-                                
+
                                 # 尝试每种路径，找到第一个存在的文件
                                 first_file_path = None
                                 for path in possible_paths:
                                     if os.path.exists(path):
                                         first_file_path = path
-                                        logger.info(f"✅ 找到音频文件: {first_file_path}")
+                                        logger.info(
+                                            f"✅ 找到音频文件: {first_file_path}")
                                         break
-                                
+
                                 if first_file_path:
-                                    duration = get_audio_duration(first_file_path)
+                                    duration = get_audio_duration(
+                                        first_file_path)
                                     logger.info(f"🔍 获取音频时长: {duration}")
                                 else:
-                                    logger.warning(f"⚠️ 无法找到音频文件: {first_file['name']}")
-                                    logger.warning(f"⚠️ 尝试的路径: {possible_paths}")
-                            
+                                    logger.warning(
+                                        f"⚠️ 无法找到音频文件: {first_file['name']}")
+                                    logger.warning(
+                                        f"⚠️ 尝试的路径: {possible_paths}")
+
                             # 音质判断
                             if any(f['name'].lower().endswith('.flac') for f in files_info):
                                 audio_quality = "无损"
@@ -18383,7 +19333,7 @@ class TelegramBot:
                                 audio_quality = "无损" if total_size_mb > 20 else "高质量"
                             else:
                                 audio_quality = "高质量"
-                            
+
                             # 文件格式显示
                             formats = set()
                             for f in files_info:
@@ -18395,9 +19345,10 @@ class TelegramBot:
                                     formats.add('AAC')
                                 elif f['name'].lower().endswith('.mp3'):
                                     formats.add('MP3')
-                            
-                            format_display = ", ".join(formats) if formats else "未知"
-                            
+
+                            format_display = ", ".join(
+                                formats) if formats else "未知"
+
                             # 构建成功消息 - 使用MarkdownV2格式，与网易云音乐保持一致
                             # 优先从curl脚本获取音乐信息，如果没有则从文件名提取
                             music_info = result.get('music_info', {})
@@ -18411,10 +19362,11 @@ class TelegramBot:
                                 first_file = files_info[0]
                                 file_name = first_file['name']
                                 # 移除文件扩展名
-                                music_title = file_name.replace('.m4a', '').replace('.flac', '').replace('.aac', '').replace('.mp3', '')
+                                music_title = file_name.replace('.m4a', '').replace(
+                                    '.flac', '').replace('.aac', '').replace('.mp3', '')
                                 artist = '未知艺术家'
                                 album = '未知专辑'
-                            
+
                             # 音质判断 - 修复：显示正确的Apple Music音质（不重复显示编码格式）
                             if any(f['name'].lower().endswith('.flac') for f in files_info):
                                 audio_quality = "FLAC"
@@ -18428,7 +19380,7 @@ class TelegramBot:
                             else:
                                 audio_quality = "MP3"
                                 bitrate = "320kbps"  # 标准MP3码率
-                            
+
                             # 修改为普通文本格式，与专辑下载保持一致
                             success_text = (
                                 f"🎵 **Apple Music 单曲下载完成**\n\n"
@@ -18442,13 +19394,14 @@ class TelegramBot:
                                 f"⏱️ 时长: {duration}\n"
                                 f"📂 保存位置: {download_path}"
                             )
-                        
+
                         else:
                             # 其他情况（未知类型）
-                            logger.warning(f"⚠️ Apple Music下载类型未知: URL={url}, music_type={result.get('music_type')}")
+                            logger.warning(
+                                f"⚠️ Apple Music下载类型未知: URL={url}, music_type={result.get('music_type')}")
                             title = "🎵 Apple Music 下载完成"
                             escaped_title = (title)
-                            
+
                             # 构建通用成功消息
                             success_text = (
                                 f"{escaped_title}\n\n"
@@ -18463,7 +19416,7 @@ class TelegramBot:
                         except Exception as e:
                             logger.error(f"发送 Apple Music 完成消息失败: {e}")
                             logger.error(f"错误详情: {type(e).__name__}: {str(e)}")
-                            
+
                             # 回退消息
                             if is_album:
                                 fallback_text = (
@@ -18487,7 +19440,7 @@ class TelegramBot:
                                 )
                             else:
                                 fallback_text = f"✅ Apple Music下载完成\n📁 下载完成，共 {len(files_info)} 个文件"
-                            
+
                             await status_message.edit_text(fallback_text, parse_mode=None)
                         return
 
@@ -18497,25 +19450,28 @@ class TelegramBot:
                         if result.get('album_name'):
                             # 专辑下载 - 参考网易云音乐格式
                             title = "🎵 YouTube Music专辑下载完成"
-                            
+
                             album_name = result.get('album_name', '未知专辑')
                             creator = result.get('creator', '未知艺术家')
                             total_songs = result.get('total_songs', 0)
-                            downloaded_songs = result.get('downloaded_songs', 0)
+                            downloaded_songs = result.get(
+                                'downloaded_songs', 0)
                             failed_songs = result.get('failed_songs', 0)
                             total_size = result.get('total_size_mb', 0)
                             download_path = result.get('download_path', '未知路径')
                             quality = result.get('quality', 'best')
-                            
+
                             # 获取音质信息
                             if quality == 'best':
-                                quality_info = {'name': 'M4A无损', 'bitrate': 'AAC/256kbps'}
+                                quality_info = {'name': 'M4A无损',
+                                                'bitrate': 'AAC/256kbps'}
                             else:
-                                quality_info = {'name': f'M4A {quality}', 'bitrate': 'Variable'}
-                            
+                                quality_info = {
+                                    'name': f'M4A {quality}', 'bitrate': 'Variable'}
+
                             # 获取歌曲列表
                             songs = result.get('songs', [])
-                            
+
                             success_text = (
                                 f"{title}\n\n"
                                 f"📀 专辑名称: {album_name}\n\n"
@@ -18526,44 +19482,49 @@ class TelegramBot:
                                 f"📊 码率: {quality_info['bitrate']}\n"
                                 f"📂 保存位置: {download_path}"
                             )
-                            
+
                             # 显示歌曲列表（限制显示数量以避免消息过长）
                             if songs:
                                 success_text += "\n\n🎵 歌曲列表:\n"
                                 for i, song in enumerate(songs[:10], 1):  # 只显示前10首
                                     song_title = song.get('title', '未知歌曲')
-                                    file_size_mb = round(song.get('file_size', 0) / (1024 * 1024), 2)
+                                    file_size_mb = round(
+                                        song.get('file_size', 0) / (1024 * 1024), 2)
                                     success_text += f"{i:02d}. {song_title}.m4a ({file_size_mb}MB)\n"
-                                
+
                                 if len(songs) > 10:
                                     success_text += f"... 还有 {len(songs) - 10} 首歌曲"
-                            
+
                             # 如果有失败的歌曲，添加失败信息
                             if failed_songs > 0:
                                 success_text += f"\n\n❌ 下载失败: {failed_songs} 首"
-                            
+
                         elif result.get('playlist_name'):
                             # 播放列表下载 - 参考网易云音乐格式
                             title = "🎵 YouTube Music播放列表下载完成"
-                            
-                            playlist_name = result.get('playlist_name', '未知播放列表')
+
+                            playlist_name = result.get(
+                                'playlist_name', '未知播放列表')
                             creator = result.get('creator', '未知创建者')
                             total_songs = result.get('total_songs', 0)
-                            downloaded_songs = result.get('downloaded_songs', 0)
+                            downloaded_songs = result.get(
+                                'downloaded_songs', 0)
                             failed_songs = result.get('failed_songs', 0)
                             total_size = result.get('total_size_mb', 0)
                             download_path = result.get('download_path', '未知路径')
                             quality = result.get('quality', 'best')
-                            
+
                             # 获取音质信息
                             if quality == 'best':
-                                quality_info = {'name': 'M4A无损', 'bitrate': 'AAC/256kbps'}
+                                quality_info = {'name': 'M4A无损',
+                                                'bitrate': 'AAC/256kbps'}
                             else:
-                                quality_info = {'name': f'M4A {quality}', 'bitrate': 'Variable'}
-                            
+                                quality_info = {
+                                    'name': f'M4A {quality}', 'bitrate': 'Variable'}
+
                             # 获取歌曲列表
                             songs = result.get('songs', [])
-                            
+
                             success_text = (
                                 f"{title}\n\n"
                                 f"📋 播放列表名称: {playlist_name}\n"
@@ -18573,22 +19534,23 @@ class TelegramBot:
                                 f"💾 总大小: {total_size:.1f} MB\n"
                                 f"📂 保存位置: {download_path}"
                             )
-                            
+
                             # 显示歌曲列表（限制显示数量以避免消息过长）
                             if songs:
                                 success_text += "\n\n🎵 歌曲列表:\n"
                                 for i, song in enumerate(songs[:10], 1):  # 只显示前10首
                                     song_title = song.get('title', '未知歌曲')
-                                    file_size_mb = round(song.get('file_size', 0) / (1024 * 1024), 2)
+                                    file_size_mb = round(
+                                        song.get('file_size', 0) / (1024 * 1024), 2)
                                     success_text += f"{i:02d}. {song_title}.m4a ({file_size_mb}MB)\n"
-                                
+
                                 if len(songs) > 10:
                                     success_text += f"... 还有 {len(songs) - 10} 首歌曲"
-                            
+
                         else:
                             # 单曲下载
                             title = "🎵 YouTube Music单曲下载完成"
-                            
+
                             song_title = result.get('song_title', '未知歌曲')
                             song_artist = result.get('song_artist', '未知艺术家')
                             filename = result.get('filename', '未知文件')
@@ -18597,20 +19559,22 @@ class TelegramBot:
                             quality = result.get('quality', 'best')
                             format_type = result.get('format', 'M4A')
                             duration = result.get('duration', 0)
-                            
+
                             # 获取音质信息
                             if quality == 'best':
-                                quality_info = {'name': f'{format_type}无损', 'bitrate': 'AAC/256kbps'}
+                                quality_info = {
+                                    'name': f'{format_type}无损', 'bitrate': 'AAC/256kbps'}
                             else:
-                                quality_info = {'name': f'{format_type} {quality}', 'bitrate': 'Variable'}
-                            
+                                quality_info = {
+                                    'name': f'{format_type} {quality}', 'bitrate': 'Variable'}
+
                             # 格式化时长
                             duration_str = "未知"
                             if duration > 0:
                                 minutes = int(duration // 60)
                                 seconds = int(duration % 60)
                                 duration_str = f"{minutes:02d}:{seconds:02d}"
-                            
+
                             success_text = (
                                 f"{title}\n\n"
                                 f"🎵 歌曲: {song_title}\n"
@@ -18620,7 +19584,7 @@ class TelegramBot:
                                 f"💾 大小: {size_mb:.2f} MB\n"
                                 f"📂 保存位置: {download_path}"
                             )
-                        
+
                         # 发送完成消息
                         try:
                             await status_message.edit_text(success_text, parse_mode=None)
@@ -18660,41 +19624,53 @@ class TelegramBot:
                                 def get_files_from_current_playlist(download_path, result, file_extensions=None):
                                     """只从本次下载的播放列表目录中获取文件"""
                                     if file_extensions is None:
-                                        file_extensions = ['.mp4', '.mkv', '.webm', '.avi', '.mov']
+                                        file_extensions = [
+                                            '.mp4', '.mkv', '.webm', '.avi', '.mov']
 
                                     download_dir = Path(download_path)
                                     video_files = []
 
                                     # 检查是否为播放列表下载
-                                    playlist_title = result.get('playlist_title')
-                                    logger.info(f"🔍 检查播放列表标题: {playlist_title}")
+                                    playlist_title = result.get(
+                                        'playlist_title')
+                                    logger.info(
+                                        f"🔍 检查播放列表标题: {playlist_title}")
 
                                     if playlist_title:
                                         # 如果是播放列表，只遍历对应的子目录
                                         playlist_dir = download_dir / playlist_title
-                                        logger.info(f"🎯 只遍历本次下载的播放列表目录: {playlist_dir}")
+                                        logger.info(
+                                            f"🎯 只遍历本次下载的播放列表目录: {playlist_dir}")
 
                                         if playlist_dir.exists():
                                             # 只遍历播放列表目录中的文件
                                             for file_path in playlist_dir.glob("*"):
                                                 if file_path.is_file() and file_path.suffix.lower() in file_extensions:
-                                                    video_files.append(file_path)
-                                                    logger.info(f"✅ 找到文件: {file_path}")
+                                                    video_files.append(
+                                                        file_path)
+                                                    logger.info(
+                                                        f"✅ 找到文件: {file_path}")
                                         else:
-                                            logger.warning(f"⚠️ 播放列表目录不存在: {playlist_dir}")
+                                            logger.warning(
+                                                f"⚠️ 播放列表目录不存在: {playlist_dir}")
                                             # 回退方案：尝试遍历根目录
-                                            logger.info(f"🔄 回退到根目录遍历: {download_dir}")
+                                            logger.info(
+                                                f"🔄 回退到根目录遍历: {download_dir}")
                                             for file_path in download_dir.glob("*"):
                                                 if file_path.is_file() and file_path.suffix.lower() in file_extensions:
-                                                    video_files.append(file_path)
-                                                    logger.info(f"✅ 在根目录找到文件: {file_path}")
+                                                    video_files.append(
+                                                        file_path)
+                                                    logger.info(
+                                                        f"✅ 在根目录找到文件: {file_path}")
                                     else:
                                         # 如果不是播放列表，只遍历根目录
-                                        logger.info(f"🎯 单视频下载，只遍历根目录: {download_dir}")
+                                        logger.info(
+                                            f"🎯 单视频下载，只遍历根目录: {download_dir}")
                                         for file_path in download_dir.glob("*"):
                                             if file_path.is_file() and file_path.suffix.lower() in file_extensions:
                                                 video_files.append(file_path)
-                                                logger.info(f"✅ 找到文件: {file_path}")
+                                                logger.info(
+                                                    f"✅ 找到文件: {file_path}")
 
                                     # 如果仍然没有找到文件，尝试递归遍历
                                     if not video_files:
@@ -18702,15 +19678,18 @@ class TelegramBot:
                                         for file_path in download_dir.rglob("*"):
                                             if file_path.is_file() and file_path.suffix.lower() in file_extensions:
                                                 video_files.append(file_path)
-                                                logger.info(f"✅ 递归找到文件: {file_path}")
+                                                logger.info(
+                                                    f"✅ 递归找到文件: {file_path}")
 
                                     # 按文件名排序
                                     video_files.sort(key=lambda x: x.name)
-                                    logger.info(f"📊 总共找到 {len(video_files)} 个文件")
+                                    logger.info(
+                                        f"📊 总共找到 {len(video_files)} 个文件")
 
                                     return video_files
 
-                                video_files = get_files_from_current_playlist(download_path, result)
+                                video_files = get_files_from_current_playlist(
+                                    download_path, result)
 
                                 # 构建文件名列表
                                 file_list = []
@@ -18719,17 +19698,20 @@ class TelegramBot:
                                     file_list.append(f"  {i:02d}. {filename}")
 
                                 # 计算总文件大小
-                                total_size = sum(f.stat().st_size for f in video_files) / (1024 * 1024)
+                                total_size = sum(
+                                    f.stat().st_size for f in video_files) / (1024 * 1024)
 
                             # 获取分辨率信息
                             if result.get('is_playlist') and result.get('files'):
                                 # 使用result中的分辨率信息
                                 resolutions = set()
                                 for file_info in file_info_list:
-                                    resolution = file_info.get('resolution', '未知')
+                                    resolution = file_info.get(
+                                        'resolution', '未知')
                                     if resolution != '未知':
                                         resolutions.add(resolution)
-                                resolution_str = ', '.join(sorted(resolutions)) if resolutions else '未知'
+                                resolution_str = ', '.join(
+                                    sorted(resolutions)) if resolutions else '未知'
                             else:
                                 # 回退方案：使用ffprobe检测分辨率
                                 resolutions = set()
@@ -18743,10 +19725,12 @@ class TelegramBot:
                                         ], capture_output=True, text=True)
                                         if result_cmd.returncode == 0:
                                             width, height = result_cmd.stdout.strip().split(',')
-                                            resolutions.add(f"{width}x{height}")
+                                            resolutions.add(
+                                                f"{width}x{height}")
                                     except:
                                         pass
-                                resolution_str = ', '.join(sorted(resolutions)) if resolutions else '未知'
+                                resolution_str = ', '.join(
+                                    sorted(resolutions)) if resolutions else '未知'
 
                             # 检查是否有文件列表，如果没有则尝试其他方式获取文件名
                             if not file_list:
@@ -18757,8 +19741,10 @@ class TelegramBot:
                                 elif result.get('files'):
                                     # 从result.files中获取文件名
                                     for i, file_info in enumerate(result['files'], 1):
-                                        filename = file_info.get('filename', f'文件{i}')
-                                        file_list.append(f"  {i:02d}. {filename}")
+                                        filename = file_info.get(
+                                            'filename', f'文件{i}')
+                                        file_list.append(
+                                            f"  {i:02d}. {filename}")
                                 else:
                                     # 最后的回退方案：使用display_filename
                                     if display_filename:
@@ -18831,7 +19817,6 @@ class TelegramBot:
             except Exception as retry_error:
                 logger.error(f"重试发送下载失败消息失败: {retry_error}")
             return
-
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 /start 命令 - 显示帮助信息"""
@@ -18942,62 +19927,74 @@ class TelegramBot:
         # B站多P自动下载按钮
         auto_playlist_current = self.bilibili_auto_playlist
         auto_playlist_text = "✅ B站多P自动下载：开启" if auto_playlist_current else "❌ B站多P自动下载：关闭"
-        auto_playlist_button = InlineKeyboardButton(auto_playlist_text, callback_data="toggle_autop")
+        auto_playlist_button = InlineKeyboardButton(
+            auto_playlist_text, callback_data="toggle_autop")
 
         # 油管自动添加标签按钮
         id_tags_current = self.youtube_id_tags
         id_tags_text = "✅ 油管自动添加标签：开启" if id_tags_current else "❌ 油管自动添加标签：关闭"
-        id_tags_button = InlineKeyboardButton(id_tags_text, callback_data="toggle_id_tags")
+        id_tags_button = InlineKeyboardButton(
+            id_tags_text, callback_data="toggle_id_tags")
 
         # YouTube音频模式按钮
         audio_mode_current = self.youtube_audio_mode
         audio_mode_text = "✅ 油管音频模式：开启" if audio_mode_current else "❌ 油管音频模式：关闭"
-        audio_mode_button = InlineKeyboardButton(audio_mode_text, callback_data="toggle_audio_mode")
+        audio_mode_button = InlineKeyboardButton(
+            audio_mode_text, callback_data="toggle_audio_mode")
 
         # B站UGC播放列表自动下载按钮
         ugc_playlist_current = self.bilibili_ugc_playlist
         ugc_playlist_text = "✅ B站UGC下载：开启" if ugc_playlist_current else "❌ B站UGC下载：关闭"
-        ugc_playlist_button = InlineKeyboardButton(ugc_playlist_text, callback_data="toggle_ugc_playlist")
+        ugc_playlist_button = InlineKeyboardButton(
+            ugc_playlist_text, callback_data="toggle_ugc_playlist")
 
         # B站弹幕下载按钮
         danmaku_current = self.bilibili_danmaku_download
         danmaku_text = "✅ B站弹幕下载：开启" if danmaku_current else "❌ B站弹幕下载：关闭"
-        danmaku_button = InlineKeyboardButton(danmaku_text, callback_data="toggle_danmaku")
+        danmaku_button = InlineKeyboardButton(
+            danmaku_text, callback_data="toggle_danmaku")
 
         # YouTube封面下载按钮
         thumbnail_current = self.youtube_thumbnail_download
         thumbnail_text = "✅ 油管封面下载：开启" if thumbnail_current else "❌ 油管封面下载：关闭"
-        thumbnail_button = InlineKeyboardButton(thumbnail_text, callback_data="toggle_thumbnail")
+        thumbnail_button = InlineKeyboardButton(
+            thumbnail_text, callback_data="toggle_thumbnail")
 
         # YouTube字幕下载按钮
         subtitle_current = self.youtube_subtitle_download
         subtitle_text = "✅ 油管字幕下载：开启" if subtitle_current else "❌ 油管字幕下载：关闭"
-        subtitle_button = InlineKeyboardButton(subtitle_text, callback_data="toggle_subtitle")
+        subtitle_button = InlineKeyboardButton(
+            subtitle_text, callback_data="toggle_subtitle")
 
         # YouTube时间戳命名按钮
         timestamp_current = self.youtube_timestamp_naming
         timestamp_text = "✅ 油管时间戳命名：开启" if timestamp_current else "❌ 油管时间戳命名：关闭"
-        timestamp_button = InlineKeyboardButton(timestamp_text, callback_data="toggle_timestamp")
+        timestamp_button = InlineKeyboardButton(
+            timestamp_text, callback_data="toggle_timestamp")
 
         # B站封面下载按钮
         bilibili_thumbnail_current = self.bilibili_thumbnail_download
         bilibili_thumbnail_text = "✅ B站封面下载：开启" if bilibili_thumbnail_current else "❌ B站封面下载：关闭"
-        bilibili_thumbnail_button = InlineKeyboardButton(bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
+        bilibili_thumbnail_button = InlineKeyboardButton(
+            bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
 
         # 网易云歌词合并按钮
         lyrics_merge_current = self.netease_lyrics_merge
         lyrics_merge_text = "✅ 网易云歌词合并：开启" if lyrics_merge_current else "❌ 网易云歌词合并：关闭"
-        lyrics_merge_button = InlineKeyboardButton(lyrics_merge_text, callback_data="toggle_lyrics_merge")
+        lyrics_merge_button = InlineKeyboardButton(
+            lyrics_merge_text, callback_data="toggle_lyrics_merge")
 
         # 网易云artist下载按钮
         artist_download_current = self.netease_artist_download
         artist_download_text = "✅ 网易云artist下载：开启" if artist_download_current else "❌ 网易云artist下载：关闭"
-        artist_download_button = InlineKeyboardButton(artist_download_text, callback_data="toggle_artist_download")
+        artist_download_button = InlineKeyboardButton(
+            artist_download_text, callback_data="toggle_artist_download")
 
         # 网易云cover下载按钮
         cover_download_current = self.netease_cover_download
         cover_download_text = "✅ 网易云cover下载：开启" if cover_download_current else "❌ 网易云cover下载：关闭"
-        cover_download_button = InlineKeyboardButton(cover_download_text, callback_data="toggle_cover_download")
+        cover_download_button = InlineKeyboardButton(
+            cover_download_text, callback_data="toggle_cover_download")
 
         reply_markup = InlineKeyboardMarkup([
             [auto_playlist_button],
@@ -19036,42 +20033,54 @@ class TelegramBot:
 
             # 重新生成四个按钮
             auto_playlist_text = "✅ B站多P自动下载：开启" if not current else "❌ B站多P自动下载：关闭"
-            auto_playlist_button = InlineKeyboardButton(auto_playlist_text, callback_data="toggle_autop")
+            auto_playlist_button = InlineKeyboardButton(
+                auto_playlist_text, callback_data="toggle_autop")
 
             id_tags_text = "✅ 油管自动添加标签：开启" if self.youtube_id_tags else "❌ 油管自动添加标签：关闭"
-            id_tags_button = InlineKeyboardButton(id_tags_text, callback_data="toggle_id_tags")
+            id_tags_button = InlineKeyboardButton(
+                id_tags_text, callback_data="toggle_id_tags")
 
             audio_mode_text = "✅ 油管音频模式：开启" if self.youtube_audio_mode else "❌ 油管音频模式：关闭"
-            audio_mode_button = InlineKeyboardButton(audio_mode_text, callback_data="toggle_audio_mode")
+            audio_mode_button = InlineKeyboardButton(
+                audio_mode_text, callback_data="toggle_audio_mode")
 
             ugc_playlist_text = "✅ B站UGC下载：开启" if self.bilibili_ugc_playlist else "❌ B站UGC下载：关闭"
-            ugc_playlist_button = InlineKeyboardButton(ugc_playlist_text, callback_data="toggle_ugc_playlist")
+            ugc_playlist_button = InlineKeyboardButton(
+                ugc_playlist_text, callback_data="toggle_ugc_playlist")
 
             danmaku_text = "✅ B站弹幕下载：开启" if self.bilibili_danmaku_download else "❌ B站弹幕下载：关闭"
-            danmaku_button = InlineKeyboardButton(danmaku_text, callback_data="toggle_danmaku")
+            danmaku_button = InlineKeyboardButton(
+                danmaku_text, callback_data="toggle_danmaku")
 
             thumbnail_text = "✅ 油管封面下载：开启" if self.youtube_thumbnail_download else "❌ 油管封面下载：关闭"
-            thumbnail_button = InlineKeyboardButton(thumbnail_text, callback_data="toggle_thumbnail")
+            thumbnail_button = InlineKeyboardButton(
+                thumbnail_text, callback_data="toggle_thumbnail")
 
             subtitle_text = "✅ 油管字幕下载：开启" if self.youtube_subtitle_download else "❌ 油管字幕下载：关闭"
-            subtitle_button = InlineKeyboardButton(subtitle_text, callback_data="toggle_subtitle")
+            subtitle_button = InlineKeyboardButton(
+                subtitle_text, callback_data="toggle_subtitle")
 
             timestamp_text = "✅ 油管时间戳命名：开启" if self.youtube_timestamp_naming else "❌ 油管时间戳命名：关闭"
-            timestamp_button = InlineKeyboardButton(timestamp_text, callback_data="toggle_timestamp")
+            timestamp_button = InlineKeyboardButton(
+                timestamp_text, callback_data="toggle_timestamp")
 
             bilibili_thumbnail_text = "✅ B站封面下载：开启" if self.bilibili_thumbnail_download else "❌ B站封面下载：关闭"
-            bilibili_thumbnail_button = InlineKeyboardButton(bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
+            bilibili_thumbnail_button = InlineKeyboardButton(
+                bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
 
             lyrics_merge_text = "✅ 网易云歌词合并：开启" if self.netease_lyrics_merge else "❌ 网易云歌词合并：关闭"
-            lyrics_merge_button = InlineKeyboardButton(lyrics_merge_text, callback_data="toggle_lyrics_merge")
+            lyrics_merge_button = InlineKeyboardButton(
+                lyrics_merge_text, callback_data="toggle_lyrics_merge")
 
             # 网易云artist下载按钮
             artist_download_text = "✅ 网易云artist下载：开启" if self.netease_artist_download else "❌ 网易云artist下载：关闭"
-            artist_download_button = InlineKeyboardButton(artist_download_text, callback_data="toggle_artist_download")
+            artist_download_button = InlineKeyboardButton(
+                artist_download_text, callback_data="toggle_artist_download")
 
             # 网易云cover下载按钮
             cover_download_text = "✅ 网易云cover下载：开启" if self.netease_cover_download else "❌ 网易云cover下载：关闭"
-            cover_download_button = InlineKeyboardButton(cover_download_text, callback_data="toggle_cover_download")
+            cover_download_button = InlineKeyboardButton(
+                cover_download_text, callback_data="toggle_cover_download")
 
             reply_markup = InlineKeyboardMarkup([
                 [auto_playlist_button],
@@ -19098,42 +20107,54 @@ class TelegramBot:
 
             # 重新生成四个按钮
             auto_playlist_text = "✅ B站多P自动下载：开启" if self.bilibili_auto_playlist else "❌ B站多P自动下载：关闭"
-            auto_playlist_button = InlineKeyboardButton(auto_playlist_text, callback_data="toggle_autop")
+            auto_playlist_button = InlineKeyboardButton(
+                auto_playlist_text, callback_data="toggle_autop")
 
             id_tags_text = "✅ 油管自动添加标签：开启" if self.youtube_id_tags else "❌ 油管自动添加标签：关闭"
-            id_tags_button = InlineKeyboardButton(id_tags_text, callback_data="toggle_id_tags")
+            id_tags_button = InlineKeyboardButton(
+                id_tags_text, callback_data="toggle_id_tags")
 
             audio_mode_text = "✅ 油管音频模式：开启" if self.youtube_audio_mode else "❌ 油管音频模式：关闭"
-            audio_mode_button = InlineKeyboardButton(audio_mode_text, callback_data="toggle_audio_mode")
+            audio_mode_button = InlineKeyboardButton(
+                audio_mode_text, callback_data="toggle_audio_mode")
 
             ugc_playlist_text = "✅ B站UGC下载：开启" if self.bilibili_ugc_playlist else "❌ B站UGC下载：关闭"
-            ugc_playlist_button = InlineKeyboardButton(ugc_playlist_text, callback_data="toggle_ugc_playlist")
+            ugc_playlist_button = InlineKeyboardButton(
+                ugc_playlist_text, callback_data="toggle_ugc_playlist")
 
             danmaku_text = "✅ B站弹幕下载：开启" if self.bilibili_danmaku_download else "❌ B站弹幕下载：关闭"
-            danmaku_button = InlineKeyboardButton(danmaku_text, callback_data="toggle_danmaku")
+            danmaku_button = InlineKeyboardButton(
+                danmaku_text, callback_data="toggle_danmaku")
 
             thumbnail_text = "✅ 油管封面下载：开启" if self.youtube_thumbnail_download else "❌ 油管封面下载：关闭"
-            thumbnail_button = InlineKeyboardButton(thumbnail_text, callback_data="toggle_thumbnail")
+            thumbnail_button = InlineKeyboardButton(
+                thumbnail_text, callback_data="toggle_thumbnail")
 
             subtitle_text = "✅ 油管字幕下载：开启" if self.youtube_subtitle_download else "❌ 油管字幕下载：关闭"
-            subtitle_button = InlineKeyboardButton(subtitle_text, callback_data="toggle_subtitle")
+            subtitle_button = InlineKeyboardButton(
+                subtitle_text, callback_data="toggle_subtitle")
 
             timestamp_text = "✅ 油管时间戳命名：开启" if self.youtube_timestamp_naming else "❌ 油管时间戳命名：关闭"
-            timestamp_button = InlineKeyboardButton(timestamp_text, callback_data="toggle_timestamp")
+            timestamp_button = InlineKeyboardButton(
+                timestamp_text, callback_data="toggle_timestamp")
 
             bilibili_thumbnail_text = "✅ B站封面下载：开启" if self.bilibili_thumbnail_download else "❌ B站封面下载：关闭"
-            bilibili_thumbnail_button = InlineKeyboardButton(bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
+            bilibili_thumbnail_button = InlineKeyboardButton(
+                bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
 
             lyrics_merge_text = "✅ 网易云歌词合并：开启" if self.netease_lyrics_merge else "❌ 网易云歌词合并：关闭"
-            lyrics_merge_button = InlineKeyboardButton(lyrics_merge_text, callback_data="toggle_lyrics_merge")
+            lyrics_merge_button = InlineKeyboardButton(
+                lyrics_merge_text, callback_data="toggle_lyrics_merge")
 
             # 网易云artist下载按钮
             artist_download_text = "✅ 网易云artist下载：开启" if self.netease_artist_download else "❌ 网易云artist下载：关闭"
-            artist_download_button = InlineKeyboardButton(artist_download_text, callback_data="toggle_artist_download")
+            artist_download_button = InlineKeyboardButton(
+                artist_download_text, callback_data="toggle_artist_download")
 
             # 网易云cover下载按钮
             cover_download_text = "✅ 网易云cover下载：开启" if self.netease_cover_download else "❌ 网易云cover下载：关闭"
-            cover_download_button = InlineKeyboardButton(cover_download_text, callback_data="toggle_cover_download")
+            cover_download_button = InlineKeyboardButton(
+                cover_download_text, callback_data="toggle_cover_download")
 
             reply_markup = InlineKeyboardMarkup([
                 [auto_playlist_button],
@@ -19160,43 +20181,55 @@ class TelegramBot:
 
             # 重新生成四个按钮
             auto_playlist_text = "✅ B站多P自动下载：开启" if self.bilibili_auto_playlist else "❌ B站多P自动下载：关闭"
-            auto_playlist_button = InlineKeyboardButton(auto_playlist_text, callback_data="toggle_autop")
+            auto_playlist_button = InlineKeyboardButton(
+                auto_playlist_text, callback_data="toggle_autop")
 
             id_tags_text = "✅ 油管自动添加标签：开启" if self.youtube_id_tags else "❌ 油管自动添加标签：关闭"
-            id_tags_button = InlineKeyboardButton(id_tags_text, callback_data="toggle_id_tags")
+            id_tags_button = InlineKeyboardButton(
+                id_tags_text, callback_data="toggle_id_tags")
 
             audio_mode_text = "✅ 油管音频模式：开启" if self.youtube_audio_mode else "❌ 油管音频模式：关闭"
-            audio_mode_button = InlineKeyboardButton(audio_mode_text, callback_data="toggle_audio_mode")
+            audio_mode_button = InlineKeyboardButton(
+                audio_mode_text, callback_data="toggle_audio_mode")
 
             ugc_playlist_text = "✅ B站UGC下载：开启" if self.bilibili_ugc_playlist else "❌ B站UGC下载：关闭"
-            ugc_playlist_button = InlineKeyboardButton(ugc_playlist_text, callback_data="toggle_ugc_playlist")
+            ugc_playlist_button = InlineKeyboardButton(
+                ugc_playlist_text, callback_data="toggle_ugc_playlist")
 
             danmaku_text = "✅ B站弹幕下载：开启" if self.bilibili_danmaku_download else "❌ B站弹幕下载：关闭"
-            danmaku_button = InlineKeyboardButton(danmaku_text, callback_data="toggle_danmaku")
+            danmaku_button = InlineKeyboardButton(
+                danmaku_text, callback_data="toggle_danmaku")
 
             thumbnail_text = "✅ 油管封面下载：开启" if self.youtube_thumbnail_download else "❌ 油管封面下载：关闭"
-            thumbnail_button = InlineKeyboardButton(thumbnail_text, callback_data="toggle_thumbnail")
+            thumbnail_button = InlineKeyboardButton(
+                thumbnail_text, callback_data="toggle_thumbnail")
 
             subtitle_text = "✅ 油管字幕下载：开启" if self.youtube_subtitle_download else "❌ 油管字幕下载：关闭"
-            subtitle_button = InlineKeyboardButton(subtitle_text, callback_data="toggle_subtitle")
+            subtitle_button = InlineKeyboardButton(
+                subtitle_text, callback_data="toggle_subtitle")
 
             timestamp_text = "✅ 油管时间戳命名：开启" if self.youtube_timestamp_naming else "❌ 油管时间戳命名：关闭"
-            timestamp_button = InlineKeyboardButton(timestamp_text, callback_data="toggle_timestamp")
+            timestamp_button = InlineKeyboardButton(
+                timestamp_text, callback_data="toggle_timestamp")
 
             bilibili_thumbnail_text = "✅ B站封面下载：开启" if self.bilibili_thumbnail_download else "❌ B站封面下载：关闭"
-            bilibili_thumbnail_button = InlineKeyboardButton(bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
+            bilibili_thumbnail_button = InlineKeyboardButton(
+                bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
 
             # 网易云歌词合并按钮
             lyrics_merge_text = "✅ 网易云歌词合并：开启" if self.netease_lyrics_merge else "❌ 网易云歌词合并：关闭"
-            lyrics_merge_button = InlineKeyboardButton(lyrics_merge_text, callback_data="toggle_lyrics_merge")
+            lyrics_merge_button = InlineKeyboardButton(
+                lyrics_merge_text, callback_data="toggle_lyrics_merge")
 
             # 网易云artist下载按钮
             artist_download_text = "✅ 网易云artist下载：开启" if self.netease_artist_download else "❌ 网易云artist下载：关闭"
-            artist_download_button = InlineKeyboardButton(artist_download_text, callback_data="toggle_artist_download")
+            artist_download_button = InlineKeyboardButton(
+                artist_download_text, callback_data="toggle_artist_download")
 
             # 网易云cover下载按钮
             cover_download_text = "✅ 网易云cover下载：开启" if self.netease_cover_download else "❌ 网易云cover下载：关闭"
-            cover_download_button = InlineKeyboardButton(cover_download_text, callback_data="toggle_cover_download")
+            cover_download_button = InlineKeyboardButton(
+                cover_download_text, callback_data="toggle_cover_download")
 
             reply_markup = InlineKeyboardMarkup([
                 [auto_playlist_button],
@@ -19223,43 +20256,55 @@ class TelegramBot:
 
             # 重新生成四个按钮
             auto_playlist_text = "✅ B站多P自动下载：开启" if self.bilibili_auto_playlist else "❌ B站多P自动下载：关闭"
-            auto_playlist_button = InlineKeyboardButton(auto_playlist_text, callback_data="toggle_autop")
+            auto_playlist_button = InlineKeyboardButton(
+                auto_playlist_text, callback_data="toggle_autop")
 
             id_tags_text = "✅ 油管自动添加标签：开启" if self.youtube_id_tags else "❌ 油管自动添加标签：关闭"
-            id_tags_button = InlineKeyboardButton(id_tags_text, callback_data="toggle_id_tags")
+            id_tags_button = InlineKeyboardButton(
+                id_tags_text, callback_data="toggle_id_tags")
 
             audio_mode_text = "✅ 油管音频模式：开启" if self.youtube_audio_mode else "❌ 油管音频模式：关闭"
-            audio_mode_button = InlineKeyboardButton(audio_mode_text, callback_data="toggle_audio_mode")
+            audio_mode_button = InlineKeyboardButton(
+                audio_mode_text, callback_data="toggle_audio_mode")
 
             ugc_playlist_text = "✅ B站UGC下载：开启" if self.bilibili_ugc_playlist else "❌ B站UGC下载：关闭"
-            ugc_playlist_button = InlineKeyboardButton(ugc_playlist_text, callback_data="toggle_ugc_playlist")
+            ugc_playlist_button = InlineKeyboardButton(
+                ugc_playlist_text, callback_data="toggle_ugc_playlist")
 
             danmaku_text = "✅ B站弹幕下载：开启" if self.bilibili_danmaku_download else "❌ B站弹幕下载：关闭"
-            danmaku_button = InlineKeyboardButton(danmaku_text, callback_data="toggle_danmaku")
+            danmaku_button = InlineKeyboardButton(
+                danmaku_text, callback_data="toggle_danmaku")
 
             thumbnail_text = "✅ 油管封面下载：开启" if self.youtube_thumbnail_download else "❌ 油管封面下载：关闭"
-            thumbnail_button = InlineKeyboardButton(thumbnail_text, callback_data="toggle_thumbnail")
+            thumbnail_button = InlineKeyboardButton(
+                thumbnail_text, callback_data="toggle_thumbnail")
 
             subtitle_text = "✅ 油管字幕下载：开启" if self.youtube_subtitle_download else "❌ 油管字幕下载：关闭"
-            subtitle_button = InlineKeyboardButton(subtitle_text, callback_data="toggle_subtitle")
+            subtitle_button = InlineKeyboardButton(
+                subtitle_text, callback_data="toggle_subtitle")
 
             timestamp_text = "✅ 油管时间戳命名：开启" if self.youtube_timestamp_naming else "❌ 油管时间戳命名：关闭"
-            timestamp_button = InlineKeyboardButton(timestamp_text, callback_data="toggle_timestamp")
+            timestamp_button = InlineKeyboardButton(
+                timestamp_text, callback_data="toggle_timestamp")
 
             bilibili_thumbnail_text = "✅ B站封面下载：开启" if self.bilibili_thumbnail_download else "❌ B站封面下载：关闭"
-            bilibili_thumbnail_button = InlineKeyboardButton(bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
+            bilibili_thumbnail_button = InlineKeyboardButton(
+                bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
 
             # 网易云歌词合并按钮
             lyrics_merge_text = "✅ 网易云歌词合并：开启" if self.netease_lyrics_merge else "❌ 网易云歌词合并：关闭"
-            lyrics_merge_button = InlineKeyboardButton(lyrics_merge_text, callback_data="toggle_lyrics_merge")
+            lyrics_merge_button = InlineKeyboardButton(
+                lyrics_merge_text, callback_data="toggle_lyrics_merge")
 
             # 网易云artist下载按钮
             artist_download_text = "✅ 网易云artist下载：开启" if self.netease_artist_download else "❌ 网易云artist下载：关闭"
-            artist_download_button = InlineKeyboardButton(artist_download_text, callback_data="toggle_artist_download")
+            artist_download_button = InlineKeyboardButton(
+                artist_download_text, callback_data="toggle_artist_download")
 
             # 网易云cover下载按钮
             cover_download_text = "✅ 网易云cover下载：开启" if self.netease_cover_download else "❌ 网易云cover下载：关闭"
-            cover_download_button = InlineKeyboardButton(cover_download_text, callback_data="toggle_cover_download")
+            cover_download_button = InlineKeyboardButton(
+                cover_download_text, callback_data="toggle_cover_download")
 
             reply_markup = InlineKeyboardMarkup([
                 [auto_playlist_button],
@@ -19288,31 +20333,40 @@ class TelegramBot:
 
             # 重新生成五个按钮
             auto_playlist_text = "✅ B站多P自动下载：开启" if self.bilibili_auto_playlist else "❌ B站多P自动下载：关闭"
-            auto_playlist_button = InlineKeyboardButton(auto_playlist_text, callback_data="toggle_autop")
+            auto_playlist_button = InlineKeyboardButton(
+                auto_playlist_text, callback_data="toggle_autop")
 
             id_tags_text = "✅ 油管自动添加标签：开启" if self.youtube_id_tags else "❌ 油管自动添加标签：关闭"
-            id_tags_button = InlineKeyboardButton(id_tags_text, callback_data="toggle_id_tags")
+            id_tags_button = InlineKeyboardButton(
+                id_tags_text, callback_data="toggle_id_tags")
 
             audio_mode_text = "✅ 油管音频模式：开启" if self.youtube_audio_mode else "❌ 油管音频模式：关闭"
-            audio_mode_button = InlineKeyboardButton(audio_mode_text, callback_data="toggle_audio_mode")
+            audio_mode_button = InlineKeyboardButton(
+                audio_mode_text, callback_data="toggle_audio_mode")
 
             ugc_playlist_text = "✅ B站UGC下载：开启" if self.bilibili_ugc_playlist else "❌ B站UGC下载：关闭"
-            ugc_playlist_button = InlineKeyboardButton(ugc_playlist_text, callback_data="toggle_ugc_playlist")
+            ugc_playlist_button = InlineKeyboardButton(
+                ugc_playlist_text, callback_data="toggle_ugc_playlist")
 
             danmaku_text = "✅ B站弹幕下载：开启" if self.bilibili_danmaku_download else "❌ B站弹幕下载：关闭"
-            danmaku_button = InlineKeyboardButton(danmaku_text, callback_data="toggle_danmaku")
+            danmaku_button = InlineKeyboardButton(
+                danmaku_text, callback_data="toggle_danmaku")
 
             thumbnail_text = "✅ 油管封面下载：开启" if self.youtube_thumbnail_download else "❌ 油管封面下载：关闭"
-            thumbnail_button = InlineKeyboardButton(thumbnail_text, callback_data="toggle_thumbnail")
+            thumbnail_button = InlineKeyboardButton(
+                thumbnail_text, callback_data="toggle_thumbnail")
 
             subtitle_text = "✅ 油管字幕下载：开启" if self.youtube_subtitle_download else "❌ 油管字幕下载：关闭"
-            subtitle_button = InlineKeyboardButton(subtitle_text, callback_data="toggle_subtitle")
+            subtitle_button = InlineKeyboardButton(
+                subtitle_text, callback_data="toggle_subtitle")
 
             timestamp_text = "✅ 油管时间戳命名：开启" if self.youtube_timestamp_naming else "❌ 油管时间戳命名：关闭"
-            timestamp_button = InlineKeyboardButton(timestamp_text, callback_data="toggle_timestamp")
+            timestamp_button = InlineKeyboardButton(
+                timestamp_text, callback_data="toggle_timestamp")
 
             bilibili_thumbnail_text = "✅ B站封面下载：开启" if self.bilibili_thumbnail_download else "❌ B站封面下载：关闭"
-            bilibili_thumbnail_button = InlineKeyboardButton(bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
+            bilibili_thumbnail_button = InlineKeyboardButton(
+                bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
 
             reply_markup = InlineKeyboardMarkup([
                 [auto_playlist_button],
@@ -19329,7 +20383,8 @@ class TelegramBot:
             await query.answer("已切换B站UGC下载状态")
 
             lyrics_merge_text = "✅ 网易云歌词合并：开启" if self.netease_lyrics_merge else "❌ 网易云歌词合并：关闭"
-            lyrics_merge_button = InlineKeyboardButton(lyrics_merge_text, callback_data="toggle_lyrics_merge")
+            lyrics_merge_button = InlineKeyboardButton(
+                lyrics_merge_text, callback_data="toggle_lyrics_merge")
 
             reply_markup = InlineKeyboardMarkup([
                 [auto_playlist_button],
@@ -19345,11 +20400,13 @@ class TelegramBot:
             ])
             # 网易云artist下载按钮
             artist_download_text = "✅ 网易云artist下载：开启" if self.netease_artist_download else "❌ 网易云artist下载：关闭"
-            artist_download_button = InlineKeyboardButton(artist_download_text, callback_data="toggle_artist_download")
+            artist_download_button = InlineKeyboardButton(
+                artist_download_text, callback_data="toggle_artist_download")
 
             # 网易云cover下载按钮
             cover_download_text = "✅ 网易云cover下载：开启" if self.netease_cover_download else "❌ 网易云cover下载：关闭"
-            cover_download_button = InlineKeyboardButton(cover_download_text, callback_data="toggle_cover_download")
+            cover_download_button = InlineKeyboardButton(
+                cover_download_text, callback_data="toggle_cover_download")
 
             reply_markup = InlineKeyboardMarkup([
                 [auto_playlist_button],
@@ -19376,22 +20433,28 @@ class TelegramBot:
 
             # 重新生成所有按钮
             auto_playlist_text = "✅ B站多P自动下载：开启" if self.bilibili_auto_playlist else "❌ B站多P自动下载：关闭"
-            auto_playlist_button = InlineKeyboardButton(auto_playlist_text, callback_data="toggle_autop")
+            auto_playlist_button = InlineKeyboardButton(
+                auto_playlist_text, callback_data="toggle_autop")
 
             id_tags_text = "✅ 油管自动添加标签：开启" if self.youtube_id_tags else "❌ 油管自动添加标签：关闭"
-            id_tags_button = InlineKeyboardButton(id_tags_text, callback_data="toggle_id_tags")
+            id_tags_button = InlineKeyboardButton(
+                id_tags_text, callback_data="toggle_id_tags")
 
             audio_mode_text = "✅ 油管音频模式：开启" if self.youtube_audio_mode else "❌ 油管音频模式：关闭"
-            audio_mode_button = InlineKeyboardButton(audio_mode_text, callback_data="toggle_audio_mode")
+            audio_mode_button = InlineKeyboardButton(
+                audio_mode_text, callback_data="toggle_audio_mode")
 
             ugc_playlist_text = "✅ B站UGC下载：开启" if self.bilibili_ugc_playlist else "❌ B站UGC下载：关闭"
-            ugc_playlist_button = InlineKeyboardButton(ugc_playlist_text, callback_data="toggle_ugc_playlist")
+            ugc_playlist_button = InlineKeyboardButton(
+                ugc_playlist_text, callback_data="toggle_ugc_playlist")
 
             danmaku_text = "✅ B站弹幕下载：开启" if self.bilibili_danmaku_download else "❌ B站弹幕下载：关闭"
-            danmaku_button = InlineKeyboardButton(danmaku_text, callback_data="toggle_danmaku")
+            danmaku_button = InlineKeyboardButton(
+                danmaku_text, callback_data="toggle_danmaku")
 
             thumbnail_text = "✅ 油管封面下载：开启" if self.youtube_thumbnail_download else "❌ 油管封面下载：关闭"
-            thumbnail_button = InlineKeyboardButton(thumbnail_text, callback_data="toggle_thumbnail")
+            thumbnail_button = InlineKeyboardButton(
+                thumbnail_text, callback_data="toggle_thumbnail")
 
             reply_markup = InlineKeyboardMarkup([
                 [auto_playlist_button],
@@ -19412,31 +20475,40 @@ class TelegramBot:
 
             # 重新生成所有按钮
             auto_playlist_text = "✅ B站多P自动下载：开启" if self.bilibili_auto_playlist else "❌ B站多P自动下载：关闭"
-            auto_playlist_button = InlineKeyboardButton(auto_playlist_text, callback_data="toggle_autop")
+            auto_playlist_button = InlineKeyboardButton(
+                auto_playlist_text, callback_data="toggle_autop")
 
             id_tags_text = "✅ 油管自动添加标签：开启" if self.youtube_id_tags else "❌ 油管自动添加标签：关闭"
-            id_tags_button = InlineKeyboardButton(id_tags_text, callback_data="toggle_id_tags")
+            id_tags_button = InlineKeyboardButton(
+                id_tags_text, callback_data="toggle_id_tags")
 
             audio_mode_text = "✅ 油管音频模式：开启" if self.youtube_audio_mode else "❌ 油管音频模式：关闭"
-            audio_mode_button = InlineKeyboardButton(audio_mode_text, callback_data="toggle_audio_mode")
+            audio_mode_button = InlineKeyboardButton(
+                audio_mode_text, callback_data="toggle_audio_mode")
 
             ugc_playlist_text = "✅ B站UGC下载：开启" if self.bilibili_ugc_playlist else "❌ B站UGC下载：关闭"
-            ugc_playlist_button = InlineKeyboardButton(ugc_playlist_text, callback_data="toggle_ugc_playlist")
+            ugc_playlist_button = InlineKeyboardButton(
+                ugc_playlist_text, callback_data="toggle_ugc_playlist")
 
             danmaku_text = "✅ B站弹幕下载：开启" if self.bilibili_danmaku_download else "❌ B站弹幕下载：关闭"
-            danmaku_button = InlineKeyboardButton(danmaku_text, callback_data="toggle_danmaku")
+            danmaku_button = InlineKeyboardButton(
+                danmaku_text, callback_data="toggle_danmaku")
 
             thumbnail_text = "✅ 油管封面下载：开启" if self.youtube_thumbnail_download else "❌ 油管封面下载：关闭"
-            thumbnail_button = InlineKeyboardButton(thumbnail_text, callback_data="toggle_thumbnail")
+            thumbnail_button = InlineKeyboardButton(
+                thumbnail_text, callback_data="toggle_thumbnail")
 
             subtitle_text = "✅ 油管字幕下载：开启" if self.youtube_subtitle_download else "❌ 油管字幕下载：关闭"
-            subtitle_button = InlineKeyboardButton(subtitle_text, callback_data="toggle_subtitle")
+            subtitle_button = InlineKeyboardButton(
+                subtitle_text, callback_data="toggle_subtitle")
 
             timestamp_text = "✅ 油管时间戳命名：开启" if self.youtube_timestamp_naming else "❌ 油管时间戳命名：关闭"
-            timestamp_button = InlineKeyboardButton(timestamp_text, callback_data="toggle_timestamp")
+            timestamp_button = InlineKeyboardButton(
+                timestamp_text, callback_data="toggle_timestamp")
 
             bilibili_thumbnail_text = "✅ B站封面下载：开启" if self.bilibili_thumbnail_download else "❌ B站封面下载：关闭"
-            bilibili_thumbnail_button = InlineKeyboardButton(bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
+            bilibili_thumbnail_button = InlineKeyboardButton(
+                bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
 
             reply_markup = InlineKeyboardMarkup([
                 [auto_playlist_button],
@@ -19453,7 +20525,8 @@ class TelegramBot:
             await query.answer("已切换油管字幕下载状态")
 
             lyrics_merge_text = "✅ 网易云歌词合并：开启" if self.netease_lyrics_merge else "❌ 网易云歌词合并：关闭"
-            lyrics_merge_button = InlineKeyboardButton(lyrics_merge_text, callback_data="toggle_lyrics_merge")
+            lyrics_merge_button = InlineKeyboardButton(
+                lyrics_merge_text, callback_data="toggle_lyrics_merge")
 
             reply_markup = InlineKeyboardMarkup([
                 [auto_playlist_button],
@@ -19469,11 +20542,13 @@ class TelegramBot:
             ])
             # 网易云artist下载按钮
             artist_download_text = "✅ 网易云artist下载：开启" if self.netease_artist_download else "❌ 网易云artist下载：关闭"
-            artist_download_button = InlineKeyboardButton(artist_download_text, callback_data="toggle_artist_download")
+            artist_download_button = InlineKeyboardButton(
+                artist_download_text, callback_data="toggle_artist_download")
 
             # 网易云cover下载按钮
             cover_download_text = "✅ 网易云cover下载：开启" if self.netease_cover_download else "❌ 网易云cover下载：关闭"
-            cover_download_button = InlineKeyboardButton(cover_download_text, callback_data="toggle_cover_download")
+            cover_download_button = InlineKeyboardButton(
+                cover_download_text, callback_data="toggle_cover_download")
 
             reply_markup = InlineKeyboardMarkup([
                 [auto_playlist_button],
@@ -19500,31 +20575,40 @@ class TelegramBot:
 
             # 重新生成所有按钮
             auto_playlist_text = "✅ B站多P自动下载：开启" if self.bilibili_auto_playlist else "❌ B站多P自动下载：关闭"
-            auto_playlist_button = InlineKeyboardButton(auto_playlist_text, callback_data="toggle_autop")
+            auto_playlist_button = InlineKeyboardButton(
+                auto_playlist_text, callback_data="toggle_autop")
 
             id_tags_text = "✅ 油管自动添加标签：开启" if self.youtube_id_tags else "❌ 油管自动添加标签：关闭"
-            id_tags_button = InlineKeyboardButton(id_tags_text, callback_data="toggle_id_tags")
+            id_tags_button = InlineKeyboardButton(
+                id_tags_text, callback_data="toggle_id_tags")
 
             audio_mode_text = "✅ 油管音频模式：开启" if self.youtube_audio_mode else "❌ 油管音频模式：关闭"
-            audio_mode_button = InlineKeyboardButton(audio_mode_text, callback_data="toggle_audio_mode")
+            audio_mode_button = InlineKeyboardButton(
+                audio_mode_text, callback_data="toggle_audio_mode")
 
             ugc_playlist_text = "✅ B站UGC下载：开启" if self.bilibili_ugc_playlist else "❌ B站UGC下载：关闭"
-            ugc_playlist_button = InlineKeyboardButton(ugc_playlist_text, callback_data="toggle_ugc_playlist")
+            ugc_playlist_button = InlineKeyboardButton(
+                ugc_playlist_text, callback_data="toggle_ugc_playlist")
 
             danmaku_text = "✅ B站弹幕下载：开启" if self.bilibili_danmaku_download else "❌ B站弹幕下载：关闭"
-            danmaku_button = InlineKeyboardButton(danmaku_text, callback_data="toggle_danmaku")
+            danmaku_button = InlineKeyboardButton(
+                danmaku_text, callback_data="toggle_danmaku")
 
             thumbnail_text = "✅ 油管封面下载：开启" if self.youtube_thumbnail_download else "❌ 油管封面下载：关闭"
-            thumbnail_button = InlineKeyboardButton(thumbnail_text, callback_data="toggle_thumbnail")
+            thumbnail_button = InlineKeyboardButton(
+                thumbnail_text, callback_data="toggle_thumbnail")
 
             subtitle_text = "✅ 油管字幕下载：开启" if self.youtube_subtitle_download else "❌ 油管字幕下载：关闭"
-            subtitle_button = InlineKeyboardButton(subtitle_text, callback_data="toggle_subtitle")
+            subtitle_button = InlineKeyboardButton(
+                subtitle_text, callback_data="toggle_subtitle")
 
             timestamp_text = "✅ 油管时间戳命名：开启" if self.youtube_timestamp_naming else "❌ 油管时间戳命名：关闭"
-            timestamp_button = InlineKeyboardButton(timestamp_text, callback_data="toggle_timestamp")
+            timestamp_button = InlineKeyboardButton(
+                timestamp_text, callback_data="toggle_timestamp")
 
             bilibili_thumbnail_text = "✅ B站封面下载：开启" if self.bilibili_thumbnail_download else "❌ B站封面下载：关闭"
-            bilibili_thumbnail_button = InlineKeyboardButton(bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
+            bilibili_thumbnail_button = InlineKeyboardButton(
+                bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
 
             reply_markup = InlineKeyboardMarkup([
                 [auto_playlist_button],
@@ -19541,7 +20625,8 @@ class TelegramBot:
             await query.answer("已切换油管时间戳命名状态")
 
             lyrics_merge_text = "✅ 网易云歌词合并：开启" if self.netease_lyrics_merge else "❌ 网易云歌词合并：关闭"
-            lyrics_merge_button = InlineKeyboardButton(lyrics_merge_text, callback_data="toggle_lyrics_merge")
+            lyrics_merge_button = InlineKeyboardButton(
+                lyrics_merge_text, callback_data="toggle_lyrics_merge")
 
             reply_markup = InlineKeyboardMarkup([
                 [auto_playlist_button],
@@ -19557,11 +20642,13 @@ class TelegramBot:
             ])
             # 网易云artist下载按钮
             artist_download_text = "✅ 网易云artist下载：开启" if self.netease_artist_download else "❌ 网易云artist下载：关闭"
-            artist_download_button = InlineKeyboardButton(artist_download_text, callback_data="toggle_artist_download")
+            artist_download_button = InlineKeyboardButton(
+                artist_download_text, callback_data="toggle_artist_download")
 
             # 网易云cover下载按钮
             cover_download_text = "✅ 网易云cover下载：开启" if self.netease_cover_download else "❌ 网易云cover下载：关闭"
-            cover_download_button = InlineKeyboardButton(cover_download_text, callback_data="toggle_cover_download")
+            cover_download_button = InlineKeyboardButton(
+                cover_download_text, callback_data="toggle_cover_download")
 
             reply_markup = InlineKeyboardMarkup([
                 [auto_playlist_button],
@@ -19588,43 +20675,55 @@ class TelegramBot:
 
             # 重新生成所有按钮
             auto_playlist_text = "✅ B站多P自动下载：开启" if self.bilibili_auto_playlist else "❌ B站多P自动下载：关闭"
-            auto_playlist_button = InlineKeyboardButton(auto_playlist_text, callback_data="toggle_autop")
+            auto_playlist_button = InlineKeyboardButton(
+                auto_playlist_text, callback_data="toggle_autop")
 
             id_tags_text = "✅ 油管自动添加标签：开启" if self.youtube_id_tags else "❌ 油管自动添加标签：关闭"
-            id_tags_button = InlineKeyboardButton(id_tags_text, callback_data="toggle_id_tags")
+            id_tags_button = InlineKeyboardButton(
+                id_tags_text, callback_data="toggle_id_tags")
 
             audio_mode_text = "✅ 油管音频模式：开启" if self.youtube_audio_mode else "❌ 油管音频模式：关闭"
-            audio_mode_button = InlineKeyboardButton(audio_mode_text, callback_data="toggle_audio_mode")
+            audio_mode_button = InlineKeyboardButton(
+                audio_mode_text, callback_data="toggle_audio_mode")
 
             ugc_playlist_text = "✅ B站UGC下载：开启" if self.bilibili_ugc_playlist else "❌ B站UGC下载：关闭"
-            ugc_playlist_button = InlineKeyboardButton(ugc_playlist_text, callback_data="toggle_ugc_playlist")
+            ugc_playlist_button = InlineKeyboardButton(
+                ugc_playlist_text, callback_data="toggle_ugc_playlist")
 
             danmaku_text = "✅ B站弹幕下载：开启" if self.bilibili_danmaku_download else "❌ B站弹幕下载：关闭"
-            danmaku_button = InlineKeyboardButton(danmaku_text, callback_data="toggle_danmaku")
+            danmaku_button = InlineKeyboardButton(
+                danmaku_text, callback_data="toggle_danmaku")
 
             thumbnail_text = "✅ 油管封面下载：开启" if self.youtube_thumbnail_download else "❌ 油管封面下载：关闭"
-            thumbnail_button = InlineKeyboardButton(thumbnail_text, callback_data="toggle_thumbnail")
+            thumbnail_button = InlineKeyboardButton(
+                thumbnail_text, callback_data="toggle_thumbnail")
 
             subtitle_text = "✅ 油管字幕下载：开启" if self.youtube_subtitle_download else "❌ 油管字幕下载：关闭"
-            subtitle_button = InlineKeyboardButton(subtitle_text, callback_data="toggle_subtitle")
+            subtitle_button = InlineKeyboardButton(
+                subtitle_text, callback_data="toggle_subtitle")
 
             timestamp_text = "✅ 油管时间戳命名：开启" if self.youtube_timestamp_naming else "❌ 油管时间戳命名：关闭"
-            timestamp_button = InlineKeyboardButton(timestamp_text, callback_data="toggle_timestamp")
+            timestamp_button = InlineKeyboardButton(
+                timestamp_text, callback_data="toggle_timestamp")
 
             bilibili_thumbnail_text = "✅ B站封面下载：开启" if self.bilibili_thumbnail_download else "❌ B站封面下载：关闭"
-            bilibili_thumbnail_button = InlineKeyboardButton(bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
+            bilibili_thumbnail_button = InlineKeyboardButton(
+                bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
 
             # 网易云歌词合并按钮
             lyrics_merge_text = "✅ 网易云歌词合并：开启" if self.netease_lyrics_merge else "❌ 网易云歌词合并：关闭"
-            lyrics_merge_button = InlineKeyboardButton(lyrics_merge_text, callback_data="toggle_lyrics_merge")
+            lyrics_merge_button = InlineKeyboardButton(
+                lyrics_merge_text, callback_data="toggle_lyrics_merge")
 
             # 网易云artist下载按钮
             artist_download_text = "✅ 网易云artist下载：开启" if self.netease_artist_download else "❌ 网易云artist下载：关闭"
-            artist_download_button = InlineKeyboardButton(artist_download_text, callback_data="toggle_artist_download")
+            artist_download_button = InlineKeyboardButton(
+                artist_download_text, callback_data="toggle_artist_download")
 
             # 网易云cover下载按钮
             cover_download_text = "✅ 网易云cover下载：开启" if self.netease_cover_download else "❌ 网易云cover下载：关闭"
-            cover_download_button = InlineKeyboardButton(cover_download_text, callback_data="toggle_cover_download")
+            cover_download_button = InlineKeyboardButton(
+                cover_download_text, callback_data="toggle_cover_download")
 
             reply_markup = InlineKeyboardMarkup([
                 [auto_playlist_button],
@@ -19651,42 +20750,54 @@ class TelegramBot:
 
             # 重新生成所有按钮
             auto_playlist_text = "✅ B站多P自动下载：开启" if self.bilibili_auto_playlist else "❌ B站多P自动下载：关闭"
-            auto_playlist_button = InlineKeyboardButton(auto_playlist_text, callback_data="toggle_autop")
+            auto_playlist_button = InlineKeyboardButton(
+                auto_playlist_text, callback_data="toggle_autop")
 
             id_tags_text = "✅ 油管自动添加标签：开启" if self.youtube_id_tags else "❌ 油管自动添加标签：关闭"
-            id_tags_button = InlineKeyboardButton(id_tags_text, callback_data="toggle_id_tags")
+            id_tags_button = InlineKeyboardButton(
+                id_tags_text, callback_data="toggle_id_tags")
 
             audio_mode_text = "✅ 油管音频模式：开启" if self.youtube_audio_mode else "❌ 油管音频模式：关闭"
-            audio_mode_button = InlineKeyboardButton(audio_mode_text, callback_data="toggle_audio_mode")
+            audio_mode_button = InlineKeyboardButton(
+                audio_mode_text, callback_data="toggle_audio_mode")
 
             ugc_playlist_text = "✅ B站UGC下载：开启" if self.bilibili_ugc_playlist else "❌ B站UGC下载：关闭"
-            ugc_playlist_button = InlineKeyboardButton(ugc_playlist_text, callback_data="toggle_ugc_playlist")
+            ugc_playlist_button = InlineKeyboardButton(
+                ugc_playlist_text, callback_data="toggle_ugc_playlist")
 
             danmaku_text = "✅ B站弹幕下载：开启" if self.bilibili_danmaku_download else "❌ B站弹幕下载：关闭"
-            danmaku_button = InlineKeyboardButton(danmaku_text, callback_data="toggle_danmaku")
+            danmaku_button = InlineKeyboardButton(
+                danmaku_text, callback_data="toggle_danmaku")
 
             thumbnail_text = "✅ 油管封面下载：开启" if self.youtube_thumbnail_download else "❌ 油管封面下载：关闭"
-            thumbnail_button = InlineKeyboardButton(thumbnail_text, callback_data="toggle_thumbnail")
+            thumbnail_button = InlineKeyboardButton(
+                thumbnail_text, callback_data="toggle_thumbnail")
 
             subtitle_text = "✅ 油管字幕下载：开启" if self.youtube_subtitle_download else "❌ 油管字幕下载：关闭"
-            subtitle_button = InlineKeyboardButton(subtitle_text, callback_data="toggle_subtitle")
+            subtitle_button = InlineKeyboardButton(
+                subtitle_text, callback_data="toggle_subtitle")
 
             timestamp_text = "✅ 油管时间戳命名：开启" if self.youtube_timestamp_naming else "❌ 油管时间戳命名：关闭"
-            timestamp_button = InlineKeyboardButton(timestamp_text, callback_data="toggle_timestamp")
+            timestamp_button = InlineKeyboardButton(
+                timestamp_text, callback_data="toggle_timestamp")
 
             bilibili_thumbnail_text = "✅ B站封面下载：开启" if self.bilibili_thumbnail_download else "❌ B站封面下载：关闭"
-            bilibili_thumbnail_button = InlineKeyboardButton(bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
+            bilibili_thumbnail_button = InlineKeyboardButton(
+                bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
 
             lyrics_merge_text = "✅ 网易云歌词合并：开启" if self.netease_lyrics_merge else "❌ 网易云歌词合并：关闭"
-            lyrics_merge_button = InlineKeyboardButton(lyrics_merge_text, callback_data="toggle_lyrics_merge")
+            lyrics_merge_button = InlineKeyboardButton(
+                lyrics_merge_text, callback_data="toggle_lyrics_merge")
 
             # 网易云artist下载按钮
             artist_download_text = "✅ 网易云artist下载：开启" if self.netease_artist_download else "❌ 网易云artist下载：关闭"
-            artist_download_button = InlineKeyboardButton(artist_download_text, callback_data="toggle_artist_download")
+            artist_download_button = InlineKeyboardButton(
+                artist_download_text, callback_data="toggle_artist_download")
 
             # 网易云cover下载按钮
             cover_download_text = "✅ 网易云cover下载：开启" if self.netease_cover_download else "❌ 网易云cover下载：关闭"
-            cover_download_button = InlineKeyboardButton(cover_download_text, callback_data="toggle_cover_download")
+            cover_download_button = InlineKeyboardButton(
+                cover_download_text, callback_data="toggle_cover_download")
 
             reply_markup = InlineKeyboardMarkup([
                 [auto_playlist_button],
@@ -19713,42 +20824,54 @@ class TelegramBot:
 
             # 重新生成所有按钮
             auto_playlist_text = "✅ B站多P自动下载：开启" if self.bilibili_auto_playlist else "❌ B站多P自动下载：关闭"
-            auto_playlist_button = InlineKeyboardButton(auto_playlist_text, callback_data="toggle_autop")
+            auto_playlist_button = InlineKeyboardButton(
+                auto_playlist_text, callback_data="toggle_autop")
 
             id_tags_text = "✅ 油管自动添加标签：开启" if self.youtube_id_tags else "❌ 油管自动添加标签：关闭"
-            id_tags_button = InlineKeyboardButton(id_tags_text, callback_data="toggle_id_tags")
+            id_tags_button = InlineKeyboardButton(
+                id_tags_text, callback_data="toggle_id_tags")
 
             audio_mode_text = "✅ 油管音频模式：开启" if self.youtube_audio_mode else "❌ 油管音频模式：关闭"
-            audio_mode_button = InlineKeyboardButton(audio_mode_text, callback_data="toggle_audio_mode")
+            audio_mode_button = InlineKeyboardButton(
+                audio_mode_text, callback_data="toggle_audio_mode")
 
             ugc_playlist_text = "✅ B站UGC下载：开启" if self.bilibili_ugc_playlist else "❌ B站UGC下载：关闭"
-            ugc_playlist_button = InlineKeyboardButton(ugc_playlist_text, callback_data="toggle_ugc_playlist")
+            ugc_playlist_button = InlineKeyboardButton(
+                ugc_playlist_text, callback_data="toggle_ugc_playlist")
 
             danmaku_text = "✅ B站弹幕下载：开启" if self.bilibili_danmaku_download else "❌ B站弹幕下载：关闭"
-            danmaku_button = InlineKeyboardButton(danmaku_text, callback_data="toggle_danmaku")
+            danmaku_button = InlineKeyboardButton(
+                danmaku_text, callback_data="toggle_danmaku")
 
             thumbnail_text = "✅ 油管封面下载：开启" if self.youtube_thumbnail_download else "❌ 油管封面下载：关闭"
-            thumbnail_button = InlineKeyboardButton(thumbnail_text, callback_data="toggle_thumbnail")
+            thumbnail_button = InlineKeyboardButton(
+                thumbnail_text, callback_data="toggle_thumbnail")
 
             subtitle_text = "✅ 油管字幕下载：开启" if self.youtube_subtitle_download else "❌ 油管字幕下载：关闭"
-            subtitle_button = InlineKeyboardButton(subtitle_text, callback_data="toggle_subtitle")
+            subtitle_button = InlineKeyboardButton(
+                subtitle_text, callback_data="toggle_subtitle")
 
             timestamp_text = "✅ 油管时间戳命名：开启" if self.youtube_timestamp_naming else "❌ 油管时间戳命名：关闭"
-            timestamp_button = InlineKeyboardButton(timestamp_text, callback_data="toggle_timestamp")
+            timestamp_button = InlineKeyboardButton(
+                timestamp_text, callback_data="toggle_timestamp")
 
             bilibili_thumbnail_text = "✅ B站封面下载：开启" if self.bilibili_thumbnail_download else "❌ B站封面下载：关闭"
-            bilibili_thumbnail_button = InlineKeyboardButton(bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
+            bilibili_thumbnail_button = InlineKeyboardButton(
+                bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
 
             lyrics_merge_text = "✅ 网易云歌词合并：开启" if self.netease_lyrics_merge else "❌ 网易云歌词合并：关闭"
-            lyrics_merge_button = InlineKeyboardButton(lyrics_merge_text, callback_data="toggle_lyrics_merge")
+            lyrics_merge_button = InlineKeyboardButton(
+                lyrics_merge_text, callback_data="toggle_lyrics_merge")
 
             # 网易云artist下载按钮
             artist_download_text = "✅ 网易云artist下载：开启" if self.netease_artist_download else "❌ 网易云artist下载：关闭"
-            artist_download_button = InlineKeyboardButton(artist_download_text, callback_data="toggle_artist_download")
+            artist_download_button = InlineKeyboardButton(
+                artist_download_text, callback_data="toggle_artist_download")
 
             # 网易云cover下载按钮
             cover_download_text = "✅ 网易云cover下载：开启" if self.netease_cover_download else "❌ 网易云cover下载：关闭"
-            cover_download_button = InlineKeyboardButton(cover_download_text, callback_data="toggle_cover_download")
+            cover_download_button = InlineKeyboardButton(
+                cover_download_text, callback_data="toggle_cover_download")
 
             reply_markup = InlineKeyboardMarkup([
                 [auto_playlist_button],
@@ -19775,42 +20898,54 @@ class TelegramBot:
 
             # 重新生成所有按钮
             auto_playlist_text = "✅ B站多P自动下载：开启" if self.bilibili_auto_playlist else "❌ B站多P自动下载：关闭"
-            auto_playlist_button = InlineKeyboardButton(auto_playlist_text, callback_data="toggle_autop")
+            auto_playlist_button = InlineKeyboardButton(
+                auto_playlist_text, callback_data="toggle_autop")
 
             id_tags_text = "✅ 油管自动添加标签：开启" if self.youtube_id_tags else "❌ 油管自动添加标签：关闭"
-            id_tags_button = InlineKeyboardButton(id_tags_text, callback_data="toggle_id_tags")
+            id_tags_button = InlineKeyboardButton(
+                id_tags_text, callback_data="toggle_id_tags")
 
             audio_mode_text = "✅ 油管音频模式：开启" if self.youtube_audio_mode else "❌ 油管音频模式：关闭"
-            audio_mode_button = InlineKeyboardButton(audio_mode_text, callback_data="toggle_audio_mode")
+            audio_mode_button = InlineKeyboardButton(
+                audio_mode_text, callback_data="toggle_audio_mode")
 
             ugc_playlist_text = "✅ B站UGC下载：开启" if self.bilibili_ugc_playlist else "❌ B站UGC下载：关闭"
-            ugc_playlist_button = InlineKeyboardButton(ugc_playlist_text, callback_data="toggle_ugc_playlist")
+            ugc_playlist_button = InlineKeyboardButton(
+                ugc_playlist_text, callback_data="toggle_ugc_playlist")
 
             danmaku_text = "✅ B站弹幕下载：开启" if self.bilibili_danmaku_download else "❌ B站弹幕下载：关闭"
-            danmaku_button = InlineKeyboardButton(danmaku_text, callback_data="toggle_danmaku")
+            danmaku_button = InlineKeyboardButton(
+                danmaku_text, callback_data="toggle_danmaku")
 
             thumbnail_text = "✅ 油管封面下载：开启" if self.youtube_thumbnail_download else "❌ 油管封面下载：关闭"
-            thumbnail_button = InlineKeyboardButton(thumbnail_text, callback_data="toggle_thumbnail")
+            thumbnail_button = InlineKeyboardButton(
+                thumbnail_text, callback_data="toggle_thumbnail")
 
             subtitle_text = "✅ 油管字幕下载：开启" if self.youtube_subtitle_download else "❌ 油管字幕下载：关闭"
-            subtitle_button = InlineKeyboardButton(subtitle_text, callback_data="toggle_subtitle")
+            subtitle_button = InlineKeyboardButton(
+                subtitle_text, callback_data="toggle_subtitle")
 
             timestamp_text = "✅ 油管时间戳命名：开启" if self.youtube_timestamp_naming else "❌ 油管时间戳命名：关闭"
-            timestamp_button = InlineKeyboardButton(timestamp_text, callback_data="toggle_timestamp")
+            timestamp_button = InlineKeyboardButton(
+                timestamp_text, callback_data="toggle_timestamp")
 
             bilibili_thumbnail_text = "✅ B站封面下载：开启" if self.bilibili_thumbnail_download else "❌ B站封面下载：关闭"
-            bilibili_thumbnail_button = InlineKeyboardButton(bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
+            bilibili_thumbnail_button = InlineKeyboardButton(
+                bilibili_thumbnail_text, callback_data="toggle_bilibili_thumbnail")
 
             lyrics_merge_text = "✅ 网易云歌词合并：开启" if self.netease_lyrics_merge else "❌ 网易云歌词合并：关闭"
-            lyrics_merge_button = InlineKeyboardButton(lyrics_merge_text, callback_data="toggle_lyrics_merge")
+            lyrics_merge_button = InlineKeyboardButton(
+                lyrics_merge_text, callback_data="toggle_lyrics_merge")
 
             # 网易云artist下载按钮
             artist_download_text = "✅ 网易云artist下载：开启" if self.netease_artist_download else "❌ 网易云artist下载：关闭"
-            artist_download_button = InlineKeyboardButton(artist_download_text, callback_data="toggle_artist_download")
+            artist_download_button = InlineKeyboardButton(
+                artist_download_text, callback_data="toggle_artist_download")
 
             # 网易云cover下载按钮
             cover_download_text = "✅ 网易云cover下载：开启" if self.netease_cover_download else "❌ 网易云cover下载：关闭"
-            cover_download_button = InlineKeyboardButton(cover_download_text, callback_data="toggle_cover_download")
+            cover_download_button = InlineKeyboardButton(
+                cover_download_text, callback_data="toggle_cover_download")
 
             reply_markup = InlineKeyboardMarkup([
                 [auto_playlist_button],
@@ -19978,7 +21113,8 @@ class TelegramBot:
                     parts.append(l)
             # 处理末行（全是#标签）
             if len(lines) > 1 and all(x.startswith('#') for x in lines[-1].split()):
-                tags = [x.lstrip('#').strip().replace(' ', '_') for x in lines[-1].split() if x.lstrip('#').strip()]
+                tags = [x.lstrip('#').strip().replace(' ', '_')
+                        for x in lines[-1].split() if x.lstrip('#').strip()]
                 if tags:
                     parts.extend(tags)
             else:
@@ -20009,7 +21145,7 @@ class TelegramBot:
             video_width = None
             video_height = None
             video_duration = None
-            time_window_seconds = 5 # 允许5秒的时间误差
+            time_window_seconds = 5  # 允许5秒的时间误差
 
             # 目标是与机器人的私聊
             try:
@@ -20041,22 +21177,27 @@ class TelegramBot:
 
             async for msg in self.user_client.iter_messages(target_entity, limit=20):
                 # 兼容两种媒体类型: document (视频/文件) 和 audio (作为音频发送)
-                media_to_check = msg.media.document if hasattr(msg.media, 'document') else msg.media
+                media_to_check = msg.media.document if hasattr(
+                    msg.media, 'document') else msg.media
 
                 if media_to_check and hasattr(media_to_check, 'size') and media_to_check.size == file_size:
                     if abs((msg.date - bot_message_timestamp).total_seconds()) < time_window_seconds:
                         telethon_message = msg
                         logger.info(f"找到匹配消息，开始提取媒体属性...")
                         logger.info(f"Telethon 消息完整信息: {telethon_message}")
-                        logger.info(f"Telethon 消息文本属性: '{telethon_message.text}'")
-                        logger.info(f"Telethon 消息原始文本: '{telethon_message.raw_text}'")
+                        logger.info(
+                            f"Telethon 消息文本属性: '{telethon_message.text}'")
+                        logger.info(
+                            f"Telethon 消息原始文本: '{telethon_message.raw_text}'")
 
                         # 检查是否为音频并提取元数据
                         if hasattr(media_to_check, 'attributes'):
-                            logger.info(f"媒体属性列表: {[type(attr).__name__ for attr in media_to_check.attributes]}")
+                            logger.info(
+                                f"媒体属性列表: {[type(attr).__name__ for attr in media_to_check.attributes]}")
 
                             for attr in media_to_check.attributes:
-                                logger.info(f"检查属性: {type(attr).__name__} - {attr}")
+                                logger.info(
+                                    f"检查属性: {type(attr).__name__} - {attr}")
 
                                 # 音频属性
                                 if isinstance(attr, types.DocumentAttributeAudio):
@@ -20064,18 +21205,21 @@ class TelegramBot:
                                         audio_bitrate = attr.bitrate
                                     if hasattr(attr, 'duration'):
                                         audio_duration = attr.duration
-                                    logger.info(f"提取到音频元数据: 码率={audio_bitrate}, 时长={audio_duration}")
+                                    logger.info(
+                                        f"提取到音频元数据: 码率={audio_bitrate}, 时长={audio_duration}")
 
                                 # 视频属性
                                 elif isinstance(attr, types.DocumentAttributeVideo):
                                     if hasattr(attr, 'w') and hasattr(attr, 'h'):
                                         video_width = attr.w
                                         video_height = attr.h
-                                        logger.info(f"提取到视频元数据: 分辨率={video_width}x{video_height}")
+                                        logger.info(
+                                            f"提取到视频元数据: 分辨率={video_width}x{video_height}")
 
                                     if hasattr(attr, 'duration'):
                                         video_duration = attr.duration
-                                        logger.info(f"提取到视频时长: {video_duration}秒")
+                                        logger.info(
+                                            f"提取到视频时长: {video_duration}秒")
 
                                 # 文档属性（可能包含文件名等信息）
                                 elif isinstance(attr, types.DocumentAttributeFilename):
@@ -20083,7 +21227,8 @@ class TelegramBot:
                                     # 使用从 Telethon 提取的文件名，如果之前没有获取到文件名
                                     if not file_name or file_name == 'unknown_file':
                                         file_name = attr.file_name
-                                        logger.info(f"使用 Telethon 文件名: {file_name}")
+                                        logger.info(
+                                            f"使用 Telethon 文件名: {file_name}")
 
                                 # 音频属性
                                 if isinstance(attr, types.DocumentAttributeAudio):
@@ -20091,20 +21236,23 @@ class TelegramBot:
                                         audio_bitrate = attr.bitrate
                                     if hasattr(attr, 'duration'):
                                         audio_duration = attr.duration
-                                    logger.info(f"提取到音频元数据: 码率={audio_bitrate}, 时长={audio_duration}")
+                                    logger.info(
+                                        f"提取到音频元数据: 码率={audio_bitrate}, 时长={audio_duration}")
 
                                 # 视频属性
                                 elif isinstance(attr, types.DocumentAttributeVideo):
                                     if hasattr(attr, 'w') and hasattr(attr, 'h'):
                                         video_width = attr.w
                                         video_height = attr.h
-                                        logger.info(f"提取到视频元数据: 分辨率={video_width}x{video_height}")
+                                        logger.info(
+                                            f"提取到视频元数据: 分辨率={video_width}x{video_height}")
 
                                     if hasattr(attr, 'duration'):
                                         video_duration = attr.duration
-                                        logger.info(f"提取到视频时长: {video_duration}秒")
+                                        logger.info(
+                                            f"提取到视频时长: {video_duration}秒")
 
-                        break # 找到匹配项，跳出循环
+                        break  # 找到匹配项，跳出循环
 
             # 如果还没有文件名，尝试从 Telethon 消息文本中提取
             if (not file_name or file_name == 'unknown_file') and telethon_message:
@@ -20112,7 +21260,7 @@ class TelegramBot:
                 if telethon_message.text and telethon_message.text.strip():
                     raw_text = telethon_message.text.strip()
                     logger.info(f"从 Telethon 消息文本中提取原始文本: {raw_text}")
-                    
+
                     # 清理消息文本，提取可能的标题
                     # 移除常见的标签和符号
                     clean_text = re.sub(r'[#@]\w+', '', raw_text).strip()
@@ -20121,7 +21269,7 @@ class TelegramBot:
                     # 限制长度
                     if len(clean_text) > 50:
                         clean_text = clean_text[:50]
-                    
+
                     if clean_text:
                         # 使用清理后的文本作为文件名
                         file_name = clean_text
@@ -20131,7 +21279,8 @@ class TelegramBot:
                         first_line = raw_text.splitlines()[0].strip()
                         if first_line:
                             # 移除#号但保留其他内容
-                            first_line = re.sub(r'^#+\s*', '', first_line).strip()
+                            first_line = re.sub(
+                                r'^#+\s*', '', first_line).strip()
                             if first_line:
                                 file_name = first_line
                                 logger.info(f"使用第一行作为文件名: {file_name}")
@@ -20139,7 +21288,7 @@ class TelegramBot:
                                 file_name = 'unknown_file'
                         else:
                             file_name = 'unknown_file'
-                    
+
                     if file_name == 'unknown_file':
                         logger.info("无法从消息文本中提取有效文件名")
                     else:
@@ -20151,8 +21300,9 @@ class TelegramBot:
             if not file_name or file_name == 'unknown_file':
                 if telethon_message and hasattr(telethon_message.media, 'document'):
                     doc_id = telethon_message.media.document.id
-                    logger.info(f"兜底机制触发 - 文件大小: {file_size} bytes, 视频分辨率: {video_width}x{video_height}, 音频时长: {audio_duration}")
-                    
+                    logger.info(
+                        f"兜底机制触发 - 文件大小: {file_size} bytes, 视频分辨率: {video_width}x{video_height}, 音频时长: {audio_duration}")
+
                     # 根据检测到的文件类型生成文件名
                     if video_width is not None and video_height is not None:
                         # 回退到使用文档ID，但添加分辨率信息
@@ -20168,10 +21318,12 @@ class TelegramBot:
                         # 如果无法确定类型，但文件大小较大，很可能是视频文件
                         if file_size > 1024 * 1024:  # 大于1MB
                             file_name = f"video_{doc_id}.mp4"
-                            logger.info(f"文件大小较大({file_size} bytes)，推测为视频文件，使用 .mp4 扩展名")
+                            logger.info(
+                                f"文件大小较大({file_size} bytes)，推测为视频文件，使用 .mp4 扩展名")
                         else:
                             file_name = f"file_{doc_id}.bin"
-                            logger.info(f"文件大小较小({file_size} bytes)，使用 .bin 扩展名")
+                            logger.info(
+                                f"文件大小较小({file_size} bytes)，使用 .bin 扩展名")
                     logger.info(f"最终生成的文件名: {file_name}")
 
             # 根据媒体类型确定下载路径
@@ -20193,15 +21345,18 @@ class TelegramBot:
 
             if is_audio_file:
                 # 音频文件放在telegram/music文件夹
-                download_path = os.path.join(self.downloader.download_path, "telegram", "music")
+                download_path = os.path.join(
+                    self.downloader.download_path, "telegram", "music")
                 logger.info(f"检测到音频文件，下载路径: {download_path}")
             elif is_video_file:
                 # 视频文件放在telegram/videos文件夹
-                download_path = os.path.join(self.downloader.download_path, "telegram", "videos")
+                download_path = os.path.join(
+                    self.downloader.download_path, "telegram", "videos")
                 logger.info(f"检测到视频文件，下载路径: {download_path}")
             else:
                 # 其他文件放在telegram文件夹
-                download_path = os.path.join(self.downloader.download_path, "telegram")
+                download_path = os.path.join(
+                    self.downloader.download_path, "telegram")
                 logger.info(f"检测到其他媒体文件，下载路径: {download_path}")
 
             os.makedirs(download_path, exist_ok=True)
@@ -20210,17 +21365,20 @@ class TelegramBot:
 
                 # 添加详细的调试信息
                 logger.info(f"消息类型: {type(telethon_message)}")
-                logger.info(f"消息媒体: {type(telethon_message.media) if telethon_message.media else 'None'}")
+                logger.info(
+                    f"消息媒体: {type(telethon_message.media) if telethon_message.media else 'None'}")
                 if telethon_message.media:
                     logger.info(f"媒体属性: {dir(telethon_message.media)}")
                     if hasattr(telethon_message.media, 'document'):
-                        logger.info(f"Document: {telethon_message.media.document}")
+                        logger.info(
+                            f"Document: {telethon_message.media.document}")
                     else:
                         logger.info(f"直接媒体: {telethon_message.media}")
 
                 # --- 下载回调 (统一为详细样式) ---
                 last_update_time = time.time()
                 last_downloaded = 0
+
                 async def progress(current, total):
                     nonlocal last_update_time, last_downloaded
                     now = time.time()
@@ -20251,7 +21409,7 @@ class TelegramBot:
                     display_filename = file_name if file_name else "未知文件"
                     percent = current * 100 / total if total > 0 else 0
                     bar = self._make_progress_bar(percent)
-                    
+
                     progress_text = (
                         f"📝 文件：{display_filename}\n"
                         f"💾 大小：{downloaded_mb:.2f}MB / {total_mb:.2f}MB\n"
@@ -20282,7 +21440,8 @@ class TelegramBot:
                             counter += 1
                         return unique_filename
 
-                    unique_file_name = get_unique_filename(download_path, file_name)
+                    unique_file_name = get_unique_filename(
+                        download_path, file_name)
                     downloaded_file = await self.user_client.download_media(
                         telethon_message,
                         file=os.path.join(download_path, unique_file_name),
@@ -20290,56 +21449,74 @@ class TelegramBot:
                     )
                     if downloaded_file:
                         # 下载成功，获取文件信息
-                        file_size_mb = os.path.getsize(downloaded_file) / (1024 * 1024)
+                        file_size_mb = os.path.getsize(
+                            downloaded_file) / (1024 * 1024)
 
                         # 检查是否为音频文件
-                        file_extension = os.path.splitext(downloaded_file)[1].lower()
-                        is_audio_file = file_extension in ['.mp3', '.flac', '.wav', '.aac', '.ogg', '.m4a', '.wma']
+                        file_extension = os.path.splitext(
+                            downloaded_file)[1].lower()
+                        is_audio_file = file_extension in [
+                            '.mp3', '.flac', '.wav', '.aac', '.ogg', '.m4a', '.wma']
 
-                        logger.info(f"🎵 音频文件检测: 文件扩展名={file_extension}, 是否为音频文件={is_audio_file}")
-                        logger.info(f"🎵 Telegram元数据: 码率={audio_bitrate}, 时长={audio_duration}")
+                        logger.info(
+                            f"🎵 音频文件检测: 文件扩展名={file_extension}, 是否为音频文件={is_audio_file}")
+                        logger.info(
+                            f"🎵 Telegram元数据: 码率={audio_bitrate}, 时长={audio_duration}")
 
                         # 对于音频文件，强制尝试获取音频信息
                         if is_audio_file:
                             try:
                                 logger.info(f"🎵 开始提取音频文件信息: {downloaded_file}")
-                                media_info = self.downloader.get_media_info(downloaded_file)
-                                logger.info(f"🎵 get_media_info返回: {media_info}")
+                                media_info = self.downloader.get_media_info(
+                                    downloaded_file)
+                                logger.info(
+                                    f"🎵 get_media_info返回: {media_info}")
 
                                 # 如果没有码率信息，从文件中提取
                                 if not audio_bitrate and media_info.get('bit_rate'):
                                     # 从字符串中提取数字，如 "320 kbps" -> 320
-                                    bit_rate_str = str(media_info.get('bit_rate', ''))
+                                    bit_rate_str = str(
+                                        media_info.get('bit_rate', ''))
                                     import re
                                     match = re.search(r'(\d+)', bit_rate_str)
                                     if match:
                                         audio_bitrate = int(match.group(1))
-                                        logger.info(f"✅ 从文件提取到音频码率: {audio_bitrate}kbps")
+                                        logger.info(
+                                            f"✅ 从文件提取到音频码率: {audio_bitrate}kbps")
                                     else:
-                                        logger.warning(f"⚠️ 无法从码率字符串提取数字: {bit_rate_str}")
+                                        logger.warning(
+                                            f"⚠️ 无法从码率字符串提取数字: {bit_rate_str}")
 
                                 # 如果没有时长信息，从文件中提取
                                 if not audio_duration and media_info.get('duration'):
-                                    duration_from_file = media_info.get('duration')
+                                    duration_from_file = media_info.get(
+                                        'duration')
                                     # 检查是否为格式化的时间字符串（如 "03:47"）
                                     if isinstance(duration_from_file, str) and ':' in duration_from_file:
                                         # 解析时间字符串为秒数
                                         try:
-                                            time_parts = duration_from_file.split(':')
+                                            time_parts = duration_from_file.split(
+                                                ':')
                                             if len(time_parts) == 2:  # MM:SS
-                                                minutes, seconds = map(int, time_parts)
+                                                minutes, seconds = map(
+                                                    int, time_parts)
                                                 audio_duration = minutes * 60 + seconds
                                             elif len(time_parts) == 3:  # HH:MM:SS
-                                                hours, minutes, seconds = map(int, time_parts)
+                                                hours, minutes, seconds = map(
+                                                    int, time_parts)
                                                 audio_duration = hours * 3600 + minutes * 60 + seconds
                                             else:
-                                                audio_duration = float(duration_from_file)
+                                                audio_duration = float(
+                                                    duration_from_file)
                                         except ValueError:
-                                            logger.warning(f"⚠️ 无法解析时长字符串: {duration_from_file}")
+                                            logger.warning(
+                                                f"⚠️ 无法解析时长字符串: {duration_from_file}")
                                     else:
                                         # 直接使用数字时长
-                                        audio_duration = float(duration_from_file)
-                                    logger.info(f"✅ 从文件提取到音频时长: {audio_duration}秒")
+                                        audio_duration = float(
+                                            duration_from_file)
+                                    logger.info(
+                                        f"✅ 从文件提取到音频时长: {audio_duration}秒")
 
                                 # 如果仍然没有获取到信息，尝试使用ffprobe
                                 if not audio_bitrate or not audio_duration:
@@ -20352,18 +21529,23 @@ class TelegramBot:
                                             'ffprobe', '-loglevel', 'quiet', '-print_format', 'json',
                                             '-show_format', '-show_streams', downloaded_file
                                         ]
-                                        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                                        result = subprocess.run(
+                                            cmd, capture_output=True, text=True, timeout=10)
 
                                         if result.returncode == 0:
-                                            probe_data = json.loads(result.stdout)
-                                            logger.info(f"🔍 ffprobe返回数据: {probe_data}")
+                                            probe_data = json.loads(
+                                                result.stdout)
+                                            logger.info(
+                                                f"🔍 ffprobe返回数据: {probe_data}")
 
                                             # 从streams中获取音频信息
                                             for stream in probe_data.get('streams', []):
                                                 if stream.get('codec_type') == 'audio':
                                                     if not audio_bitrate and 'bit_rate' in stream:
-                                                        audio_bitrate = int(int(stream['bit_rate']) / 1000)  # 转换为kbps
-                                                        logger.info(f"✅ ffprobe从streams获取到码率: {audio_bitrate}kbps")
+                                                        audio_bitrate = int(
+                                                            int(stream['bit_rate']) / 1000)  # 转换为kbps
+                                                        logger.info(
+                                                            f"✅ ffprobe从streams获取到码率: {audio_bitrate}kbps")
                                                     break
 
                                             # 从format中获取码率和时长信息
@@ -20372,17 +21554,23 @@ class TelegramBot:
 
                                                 # 如果streams中没有码率信息，尝试从format中获取
                                                 if not audio_bitrate and 'bit_rate' in format_info:
-                                                    audio_bitrate = int(int(format_info['bit_rate']) / 1000)  # 转换为kbps
-                                                    logger.info(f"✅ ffprobe从format获取到码率: {audio_bitrate}kbps")
+                                                    audio_bitrate = int(
+                                                        int(format_info['bit_rate']) / 1000)  # 转换为kbps
+                                                    logger.info(
+                                                        f"✅ ffprobe从format获取到码率: {audio_bitrate}kbps")
 
                                                 # 获取时长信息
                                                 if (not audio_duration or not isinstance(audio_duration, (int, float))) and 'duration' in format_info:
-                                                    audio_duration = float(format_info['duration'])
-                                                    logger.info(f"✅ ffprobe获取到时长: {audio_duration}秒")
+                                                    audio_duration = float(
+                                                        format_info['duration'])
+                                                    logger.info(
+                                                        f"✅ ffprobe获取到时长: {audio_duration}秒")
                                         else:
-                                            logger.warning(f"⚠️ ffprobe执行失败: {result.stderr}")
+                                            logger.warning(
+                                                f"⚠️ ffprobe执行失败: {result.stderr}")
                                     except Exception as ffprobe_error:
-                                        logger.warning(f"⚠️ ffprobe执行异常: {ffprobe_error}")
+                                        logger.warning(
+                                            f"⚠️ ffprobe执行异常: {ffprobe_error}")
 
                             except Exception as e:
                                 logger.warning(f"❌ 无法从文件提取音频信息: {e}")
@@ -20396,13 +21584,17 @@ class TelegramBot:
                                     minutes, seconds = map(int, time_parts)
                                     audio_duration = minutes * 60 + seconds
                                 elif len(time_parts) == 3:  # HH:MM:SS
-                                    hours, minutes, seconds = map(int, time_parts)
+                                    hours, minutes, seconds = map(
+                                        int, time_parts)
                                     audio_duration = hours * 3600 + minutes * 60 + seconds
-                                logger.info(f"🔧 解析时长字符串 '{':'.join(time_parts)}' 为 {audio_duration} 秒")
+                                logger.info(
+                                    f"🔧 解析时长字符串 '{':'.join(time_parts)}' 为 {audio_duration} 秒")
                             except ValueError as e:
-                                logger.warning(f"⚠️ 无法解析时长字符串 '{audio_duration}': {e}")
+                                logger.warning(
+                                    f"⚠️ 无法解析时长字符串 '{audio_duration}': {e}")
 
-                        logger.info(f"🎵 最终音频信息: 码率={audio_bitrate}, 时长={audio_duration}")
+                        logger.info(
+                            f"🎵 最终音频信息: 码率={audio_bitrate}, 时长={audio_duration}")
 
                         # 构建成功消息
                         success_text = f"✅ 文件下载完成\n\n"
@@ -20434,7 +21626,8 @@ class TelegramBot:
                         # 显示时长信息（音频或视频）
                         duration_to_show = audio_duration if is_audio_file else video_duration
                         if duration_to_show:
-                            minutes, seconds = divmod(int(duration_to_show), 60)
+                            minutes, seconds = divmod(
+                                int(duration_to_show), 60)
                             duration_str = f"{minutes:02d}:{seconds:02d}"
                             success_text += f"⏱️ 时长: {duration_str}\n"
 
@@ -20444,7 +21637,7 @@ class TelegramBot:
                             text=success_text,
                             chat_id=chat_id,
                             message_id=status_message.message_id,
-                                parse_mode=None
+                            parse_mode=None
                         )
                         logger.info(f"✅ 媒体文件下载完成: {downloaded_file}")
                     else:
@@ -20499,7 +21692,8 @@ class TelegramBot:
             logger.warning(f"🌐 检测到网络错误: {error_type}: {error_msg}")
             logger.info("🔄 网络错误将由健康检查机制自动处理")
         else:
-            logger.error(f"❌ PTB 错误: {error_type}: {error_msg}", exc_info=error)
+            logger.error(
+                f"❌ PTB 错误: {error_type}: {error_msg}", exc_info=error)
 
         # 对于严重的网络错误，触发立即健康检查
         if is_network_error and any(critical in error_msg.lower() for critical in [
@@ -20554,7 +21748,8 @@ class GlobalProgressManager:
 
         # 构建进度消息
         progress_lines = []
-        progress_lines.append(f"📦 **批量下载进度** ({completed_tasks}/{total_tasks})")
+        progress_lines.append(
+            f"📦 **批量下载进度** ({completed_tasks}/{total_tasks})")
 
         # 显示前3个活跃任务
         active_tasks = [
@@ -20574,7 +21769,8 @@ class GlobalProgressManager:
             else:
                 speed_str = "未知"
 
-            progress_lines.append(f"{i}. `{filename}` - {progress:.1f}% ({speed_str})")
+            progress_lines.append(
+                f"{i}. `{filename}` - {progress:.1f}% ({speed_str})")
 
         if len(active_tasks) < total_tasks - completed_tasks:
             remaining = total_tasks - completed_tasks - len(active_tasks)
@@ -20587,7 +21783,7 @@ class GlobalProgressManager:
                 text=progress_text,
                 chat_id=status_message.chat_id,
                 message_id=status_message.message_id,
-                                parse_mode=None,
+                parse_mode=None,
             )
         except Exception as e:
             if "Message is not modified" not in str(e) and "Flood control" not in str(
@@ -20628,6 +21824,7 @@ async def test_network_connectivity():
     logger.error(f"🔴 所有网络连接测试都失败")
     return False
 
+
 async def main():
     """主函数 (异步)"""
     # 启动时环境检查
@@ -20649,14 +21846,19 @@ async def main():
     if toml_config and load_toml_config:
         telegram_config = get_telegram_config(toml_config)
         proxy_config = get_proxy_config(toml_config)
-        
+
         # 从 TOML 配置获取 Telegram 参数
-        bot_token = telegram_config.get('bot_token', '') or os.getenv("TELEGRAM_BOT_TOKEN", "")
-        allowed_user_ids = telegram_config.get('allowed_user_ids', '') or os.getenv("TELEGRAM_BOT_ALLOWED_USER_IDS", "")
-        api_id = telegram_config.get('api_id', '') or os.getenv("TELEGRAM_BOT_API_ID", "")
-        api_hash = telegram_config.get('api_hash', '') or os.getenv("TELEGRAM_BOT_API_HASH", "")
-        proxy_host = proxy_config.get('proxy_host', '') or os.getenv("PROXY_HOST", "")
-        
+        bot_token = telegram_config.get(
+            'bot_token', '') or os.getenv("TELEGRAM_BOT_TOKEN", "")
+        allowed_user_ids = telegram_config.get('allowed_user_ids', '') or os.getenv(
+            "TELEGRAM_BOT_ALLOWED_USER_IDS", "")
+        api_id = telegram_config.get('api_id', '') or os.getenv(
+            "TELEGRAM_BOT_API_ID", "")
+        api_hash = telegram_config.get('api_hash', '') or os.getenv(
+            "TELEGRAM_BOT_API_HASH", "")
+        proxy_host = proxy_config.get(
+            'proxy_host', '') or os.getenv("PROXY_HOST", "")
+
         # 设置为环境变量以保持其他代码的兼容性
         if proxy_host:
             os.environ['PROXY_HOST'] = proxy_host
@@ -20690,15 +21892,21 @@ async def main():
     logger.info("健康检查功能已禁用，避免事件循环冲突")
     # 硬编码下载路径为 /downloads
     download_path = "/downloads"
-    
+
     # 统一cookies目录配置
     cookies_base_dir = "/app/cookies"
-    x_cookies_path = os.getenv("X_COOKIES") or f"{cookies_base_dir}/x_cookies.txt"
-    b_cookies_path = os.getenv("BILIBILI_COOKIES") or os.getenv("B_COOKIES") or f"{cookies_base_dir}/bilibili_cookies.txt"
-    youtube_cookies_path = os.getenv("YOUTUBE_COOKIES") or f"{cookies_base_dir}/youtube_cookies.txt"
-    douyin_cookies_path = os.getenv("DOUYIN_COOKIES") or f"{cookies_base_dir}/douyin_cookies.txt"
-    kuaishou_cookies_path = os.getenv("KUAISHOU_COOKIES") or f"{cookies_base_dir}/kuaishou_cookies.txt"
-    instagram_cookies_path = os.getenv("INSTAGRAM_COOKIES") or f"{cookies_base_dir}/instagram_cookies.txt"
+    x_cookies_path = os.getenv(
+        "X_COOKIES") or f"{cookies_base_dir}/x_cookies.txt"
+    b_cookies_path = os.getenv("BILIBILI_COOKIES") or os.getenv(
+        "B_COOKIES") or f"{cookies_base_dir}/bilibili_cookies.txt"
+    youtube_cookies_path = os.getenv(
+        "YOUTUBE_COOKIES") or f"{cookies_base_dir}/youtube_cookies.txt"
+    douyin_cookies_path = os.getenv(
+        "DOUYIN_COOKIES") or f"{cookies_base_dir}/douyin_cookies.txt"
+    kuaishou_cookies_path = os.getenv(
+        "KUAISHOU_COOKIES") or f"{cookies_base_dir}/kuaishou_cookies.txt"
+    instagram_cookies_path = os.getenv(
+        "INSTAGRAM_COOKIES") or f"{cookies_base_dir}/instagram_cookies.txt"
 
     logger.info(f"📁 下载路径: {download_path}")
     if x_cookies_path:
@@ -20757,18 +21965,18 @@ async def main():
     # 确保下载目录存在
     download_path_obj = Path(download_path)
     download_path_obj.mkdir(parents=True, exist_ok=True)
-    
+
     # 确保cookies目录存在
     cookies_dir = Path(cookies_base_dir)
     cookies_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"📁 确保cookies目录存在: {cookies_base_dir}")
-    
+
     # 确保 AppleMusic 子目录存在
     apple_music_path = download_path_obj / "AppleMusic"
     apple_music_path.mkdir(parents=True, exist_ok=True)
     logger.info(f"📁 确保下载目录存在: {download_path}")
     logger.info(f"📁 确保 AppleMusic 子目录存在: {apple_music_path}")
-    
+
     # 创建下载器和机器人
     downloader = VideoDownloader(
         download_path, x_cookies_path, b_cookies_path, youtube_cookies_path, douyin_cookies_path, kuaishou_cookies_path, None, instagram_cookies_path
@@ -20787,7 +21995,8 @@ async def main():
             logger.info(f"🌐 启动内置Flask服务（仅用于 Telegram 会话生成）")
             logger.info(f"   🔍 Web端口: {web_port} (包含 /setup)")
 
-            app.run(host="0.0.0.0", port=web_port, debug=False, use_reloader=False)
+            app.run(host="0.0.0.0", port=web_port,
+                    debug=False, use_reloader=False)
         except Exception as e:
             logger.error(f"❌ Flask启动失败: {e}")
 
@@ -20803,40 +22012,9 @@ async def main():
     # ==================== B站收藏夹订阅功能 ====================
 
 
-
-
 if __name__ == "__main__":
     try:
         # 心跳更新已删除  # 初始化心跳
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logger.info("机器人已停止。")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
