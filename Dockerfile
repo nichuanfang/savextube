@@ -104,11 +104,11 @@ ARG TARGETARCH
 
 RUN cd /tmp && \
     if [ "$TARGETARCH" = "amd64" ]; then \
-        wget https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz; \
+    wget https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz; \
     elif [ "$TARGETARCH" = "arm64" ]; then \
-        wget https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz; \
+    wget https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz; \
     else \
-        echo "Unsupported arch: $TARGETARCH" && exit 1; \
+    echo "Unsupported arch: $TARGETARCH" && exit 1; \
     fi && \
     tar -xf ffmpeg-release-${TARGETARCH}-static.tar.xz && \
     cp ffmpeg-*-static/ffmpeg /usr/local/bin/ && \
