@@ -20,7 +20,7 @@ pycryptodome
 mutagen
 eyed3
 tinytag
-gamdl==2.6.5
+gamdl
 aiofiles>=0.8.0
 opencc-python-reimplemented
 tomli
