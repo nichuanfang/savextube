@@ -14198,7 +14198,7 @@ class VideoDownloader:
                 }
 
             # 提取音乐信息
-            music_info = self.apple_music_downloader.extract_music_info(url)
+            music_info = self.apple_music_downloader.extract_music_info_for_myself(url)
             logger.info(f"🍎 Apple Music 信息: {music_info}")
 
             # 创建进度回调

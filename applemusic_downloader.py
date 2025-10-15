@@ -194,6 +194,46 @@ class AppleMusicDownloader:
         except Exception as e:
             logger.error(f"❌ 提取音乐信息失败: {e}")
             return {'url': url, 'type': 'unknown', 'id': None, 'country': 'us'}
+        
+    def extract_music_info_for_myself(self, url: str) -> Dict[str, Any]:
+        """从 URL 中提取音乐信息 定制化解析"""
+        try:
+            # 解析 URL 获取音乐类型和 ID
+            parsed = urlparse(url)
+            path_parts = parsed.path.strip('/').split('/')
+
+            music_info = {
+                'url': url,
+                'type': 'unknown',
+                'id': None,
+                'country': 'us'
+            }
+
+            # 提取国家代码
+            if len(path_parts) > 0:
+                if len(path_parts[0]) == 2:  # 国家代码通常是2个字符
+                    music_info['country'] = path_parts[0]
+                    path_parts = path_parts[1:]
+
+                # 提取音乐类型
+                if len(path_parts) > 0:
+                    if path_parts[0] in ['album', 'playlist', 'song']:
+                        # 固定为歌曲
+                        music_info['type'] = 'song'
+                        if len(path_parts) > 1:
+                            music_info['id'] = path_parts[1]
+
+            # 从查询参数中提取 ID
+            query_params = parse_qs(parsed.query)
+            if 'i' in query_params:
+                music_info['id'] = query_params['i'][0]
+
+            logger.info(f"📱 提取的 Apple Music 信息: {music_info}")
+            return music_info
+
+        except Exception as e:
+            logger.error(f"❌ 提取音乐信息失败: {e}")
+            return {'url': url, 'type': 'unknown', 'id': None, 'country': 'us'}
 
     async def download_music(self, url: str, progress_callback=None) -> Dict[str, Any]:
         """
