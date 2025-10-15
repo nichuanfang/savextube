@@ -247,7 +247,8 @@ class AppleMusicDownloader:
             cmd = ['gamdl']
 
             # 添加 cookies 参数
-            if self.cookies_path and os.path.exists(self.cookies_path):
+            # if self.cookies_path and os.path.exists(self.cookies_path):
+            if self.cookies_path:
                 cmd.extend(['--cookies-path', self.cookies_path])
                 logger.info(f"🍪 使用 cookies 文件: {self.cookies_path}")
             else:
