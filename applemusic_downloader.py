@@ -458,12 +458,12 @@ class AppleMusicDownloader:
             # 发送完成消息
             if progress_callback:
                 final_text = (
-                    f"✅ **Apple Music 下载完成**\n"
-                    f"📝 类型: `{music_info['type']}`\n"
-                    f"🌍 地区: `{music_info['country']}`\n"
-                    f"🎵 文件数量: `{files_count} 个`\n"
-                    f"💾 总大小: `{total_size / (1024*1024):.2f} MB`\n"
-                    f"📄 文件格式: `{', '.join(file_formats)}`"
+                    f"✅ Apple Music 下载完成\n\n"
+                    f"📝 类型: {music_info['type']}\n"
+                    f"🌍 地区: {music_info['country']}\n"
+                    f"🎵 文件数量: {files_count} 个\n"
+                    f"💾 总大小: {total_size / (1024*1024):.2f} MB\n"
+                    f"📄 文件格式: {', '.join(file_formats)}"
                 )
                 await self._safe_callback(progress_callback, final_text)
 
