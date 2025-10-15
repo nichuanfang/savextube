@@ -18770,8 +18770,11 @@ class TelegramBot:
 
                         # 修复：直接以URL检测为准，URL检测最准确
                         url = result.get('url', '')
-                        is_album = 'album' in url
-                        is_song = 'song' in url
+                        # is_album = 'album' in url
+                        # 只支持单曲
+                        is_album = False
+                        # is_song = 'song' in url
+                        is_song = True
 
                         logger.info(
                             f"🔍 URL检测结果: album={is_album}, song={is_song}")

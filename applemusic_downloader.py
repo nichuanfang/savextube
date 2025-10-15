@@ -260,7 +260,7 @@ class AppleMusicDownloader:
 
         try:
             # 提取音乐信息
-            music_info = self.extract_music_info(url)
+            music_info = self.extract_music_info_for_myself(url)
 
             # 发送开始下载消息
             if progress_callback:
