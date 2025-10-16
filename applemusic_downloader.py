@@ -51,7 +51,8 @@ class AppleMusicDownloader:
                 'cover': True,     # 是否下载封面
                 'lyrics': True,    # 是否下载歌词
                 'timeout': 900,    # 15分钟超时
-                'retry_delay': 10  # 重试延迟增加到10秒
+                'retry_delay': 10,  # 重试延迟增加到10秒,
+                "synced_lyrics_only": True  # 只下载同步歌词
             }
         else:
             # 本地环境的默认设置
@@ -194,7 +195,7 @@ class AppleMusicDownloader:
         except Exception as e:
             logger.error(f"❌ 提取音乐信息失败: {e}")
             return {'url': url, 'type': 'unknown', 'id': None, 'country': 'us'}
-        
+
     def extract_music_info_for_myself(self, url: str) -> Dict[str, Any]:
         """从 URL 中提取音乐信息 定制化解析"""
         try:
@@ -296,10 +297,23 @@ class AppleMusicDownloader:
             # 添加输出路径
             if self.output_dir:
                 cmd.extend(['--output-path', str(self.output_dir)])
+                # 设置模板，所有音乐文件直接放根目录，文件名格式为 "歌手 - 歌曲名.后缀"
+                cmd.extend([
+                    '--template-folder-album', '',
+                    '--template-folder-compilation', '',
+                    '--template-folder-no-album', '',
+                    '--template-file-single-disc', '{artist} - {title}.{ext}',
+                    '--template-file-multi-disc', '{artist} - {title}.{ext}',
+                    '--template-file-no-album', '{artist} - {title}.{ext}',
+                ])
 
             # 添加封面选项
             if self.default_options['cover']:
                 cmd.append('--save-cover')
+
+            # 只下载同步歌词
+            if self.default_options['synced_lyrics_only']:
+                cmd.append('--synced-lyrics-only')
 
             # 添加网络优化参数
             cmd.extend(['--log-level', 'INFO'])  # 设置日志级别
