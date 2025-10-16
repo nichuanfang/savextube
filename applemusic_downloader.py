@@ -48,11 +48,10 @@ class AppleMusicDownloader:
             self.default_options = {
                 'quality': '256',  # 音质：128, 256, 320
                 'format': 'm4a',   # 格式：mp3, m4a, flac (Docker 环境使用 m4a)
-                'cover': True,     # 是否下载封面
+                'cover': False,     # 是否下载封面
                 'lyrics': True,    # 是否下载歌词
                 'timeout': 900,    # 15分钟超时
-                'retry_delay': 10,  # 重试延迟增加到10秒,
-                "synced_lyrics_only": True  # 只下载同步歌词
+                'retry_delay': 10,  # 重试延迟增加到10秒
             }
         else:
             # 本地环境的默认设置
@@ -305,10 +304,6 @@ class AppleMusicDownloader:
             # 添加封面选项
             if self.default_options['cover']:
                 cmd.append('--save-cover')
-
-            # 只下载同步歌词
-            if self.default_options['synced_lyrics_only']:
-                cmd.append('--synced-lyrics-only')
 
             # 添加网络优化参数
             cmd.extend(['--log-level', 'INFO'])  # 设置日志级别
