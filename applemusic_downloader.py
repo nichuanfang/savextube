@@ -298,14 +298,9 @@ class AppleMusicDownloader:
             if self.output_dir:
                 cmd.extend(['--output-path', str(self.output_dir)])
                 # 设置模板，所有音乐文件直接放根目录，文件名格式为 "歌手 - 歌曲名.后缀"
-                cmd.extend([
-                    '--template-folder-album', '',
-                    '--template-folder-compilation', '',
-                    '--template-folder-no-album', '',
-                    '--template-file-single-disc', '{artist} - {title}.{ext}',
-                    '--template-file-multi-disc', '{artist} - {title}.{ext}',
-                    '--template-file-no-album', '{artist} - {title}.{ext}',
-                ])
+                cmd.extend(['--template-folder-album', '.'])
+                cmd.extend(['--template-folder-compilation', '.'])
+                cmd.extend(['--template-folder-no-album', '.'])
 
             # 添加封面选项
             if self.default_options['cover']:
