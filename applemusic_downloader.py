@@ -296,7 +296,7 @@ class AppleMusicDownloader:
             # 添加输出路径
             if self.output_dir:
                 # cmd.extend(['--output-path', str(self.output_dir)])
-                cmd.extend(['--output-path', './downloads'])
+                cmd.extend(['--output-path', '/downloads'])
                 # 设置模板，所有音乐文件直接放根目录，文件名格式为 "歌手 - 歌曲名.后缀"
                 cmd.extend(['--template-folder-album', 'AppleMusic'])
                 cmd.extend(['--template-folder-compilation', 'AppleMusic'])
