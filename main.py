@@ -15047,9 +15047,9 @@ class TelegramBot:
             try:
                 # 尝试多个可能的配置文件路径
                 config_paths = [
+                    "/app/config/savextube.toml",
                     "savextube.toml",
                     "savextube_full.toml",
-                    "/app/config/savextube.toml",
                     "config.toml"
                 ]
 
