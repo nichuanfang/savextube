@@ -15818,7 +15818,7 @@ class TelegramBot:
         api_id = os.getenv("TELEGRAM_BOT_API_ID")
         api_hash = os.getenv("TELEGRAM_BOT_API_HASH")
         session_string = os.getenv("TELEGRAM_SESSION_STRING")
-        webhook_url = os.getenv("WEBHOOK_URL")
+        webhook_url = os.getenv("WEBHOOK_URL") 
 
         # 如果环境变量中没有 session_string，尝试从固定路径加载
         if not session_string:
@@ -15914,7 +15914,7 @@ class TelegramBot:
                 await self.application.start()
                 
                 # 判断是否使用webhook
-                if not webhook_url:
+                if webhook_url:
                     # 改为webhook的方式
                     logger.info(f'使用webhook方式启动,url:{webhook_url}')
                     await self.application.run_webhook(
