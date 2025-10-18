@@ -15910,7 +15910,8 @@ class TelegramBot:
         # 启动应用程序
         try:
             async with self.application:
-                
+                await application.initialize()
+                await application.start()
                 # 判断是否使用webhook
                 if webhook_url:
                     # 改为webhook的方式
@@ -15923,8 +15924,6 @@ class TelegramBot:
                     )
                 else:
                     logger.info('使用长轮询方式启动')
-                    await self.application.initialize()
-                    await self.application.start()
                     # 配置更强的网络参数
                     await self.application.updater.start_polling(
                         timeout=30,  # 增加超时时间
@@ -15932,12 +15931,13 @@ class TelegramBot:
                         write_timeout=30,
                         connect_timeout=30,
                         pool_timeout=30
-                    )    
+                    ) 
+                    asyncio.create_task(self._keep_alive_heartbeat())
                 
                 logger.info("机器人已成功启动并正在运行。")
 
                 # 健康检查功能已删除，避免事件循环冲突
-                asyncio.create_task(self._keep_alive_heartbeat())
+                # 
 
                 # 启动B站收藏夹订阅检查任务
                 if self.fav_manager:
