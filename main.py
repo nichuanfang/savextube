@@ -14198,7 +14198,8 @@ class VideoDownloader:
                 }
 
             # 提取音乐信息
-            music_info = self.apple_music_downloader.extract_music_info_for_myself(url)
+            music_info = self.apple_music_downloader.extract_music_info_for_myself(
+                url)
             logger.info(f"🍎 Apple Music 信息: {music_info}")
 
             # 创建进度回调
@@ -15817,6 +15818,7 @@ class TelegramBot:
         api_id = os.getenv("TELEGRAM_BOT_API_ID")
         api_hash = os.getenv("TELEGRAM_BOT_API_HASH")
         session_string = os.getenv("TELEGRAM_SESSION_STRING")
+        webhook_url = os.getenv("WEBHOOK_URL")
 
         # 如果环境变量中没有 session_string，尝试从固定路径加载
         if not session_string:
@@ -15910,16 +15912,28 @@ class TelegramBot:
             async with self.application:
                 await self.application.initialize()
                 await self.application.start()
-
-                # 配置更强的网络参数
-                await self.application.updater.start_polling(
-                    timeout=30,  # 增加超时时间
-                    read_timeout=30,
-                    write_timeout=30,
-                    connect_timeout=30,
-                    pool_timeout=30
-                )
-
+                
+                # 判断是否使用webhook
+                if not webhook_url:
+                    # 改为webhook的方式
+                    logger.info(f'使用webhook方式启动,url:{webhook_url}')
+                    await self.application.run_webhook(
+                        listen="0.0.0.0",  
+                        port=8520,         
+                        url_path="savextube/webhook",
+                        webhook_url=webhook_url
+                    )
+                else:
+                    logger.info('使用长轮询方式启动')
+                    # 配置更强的网络参数
+                    await self.application.updater.start_polling(
+                        timeout=30,  # 增加超时时间
+                        read_timeout=30,
+                        write_timeout=30,
+                        connect_timeout=30,
+                        pool_timeout=30
+                    )    
+                
                 logger.info("机器人已成功启动并正在运行。")
 
                 # 健康检查功能已删除，避免事件循环冲突
