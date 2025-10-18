@@ -15917,6 +15917,7 @@ class TelegramBot:
                 if webhook_url:
                     # 改为webhook的方式
                     logger.info(f'使用webhook方式启动,url:{webhook_url}')
+                    await self.application.bot.set_webhook(url=webhook_url)
                     await self.application.run_webhook(
                         listen="0.0.0.0",  
                         port=8520,         
