@@ -15910,22 +15910,21 @@ class TelegramBot:
         # 启动应用程序
         try:
             async with self.application:
-                await self.application.initialize()
-                await self.application.start()
                 
                 # 判断是否使用webhook
                 if webhook_url:
                     # 改为webhook的方式
                     logger.info(f'使用webhook方式启动,url:{webhook_url}')
-                    await self.application.bot.set_webhook(url=webhook_url)
                     await self.application.run_webhook(
                         listen="0.0.0.0",  
                         port=8520,         
-                        url_path="savextube/webhook",
-                        webhook_url=webhook_url
+                        url_path=self.token,
+                        webhook_url=f"{webhook_url}/{self.token}"
                     )
                 else:
                     logger.info('使用长轮询方式启动')
+                    await self.application.initialize()
+                    await self.application.start()
                     # 配置更强的网络参数
                     await self.application.updater.start_polling(
                         timeout=30,  # 增加超时时间
