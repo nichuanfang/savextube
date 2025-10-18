@@ -15910,8 +15910,8 @@ class TelegramBot:
         # 启动应用程序
         try:
             async with self.application:
-                await application.initialize()
-                await application.start()
+                await self.application.initialize()
+                await self.application.start()
                 # 判断是否使用webhook
                 if webhook_url:
                     # 改为webhook的方式
